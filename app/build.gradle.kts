@@ -47,6 +47,10 @@ dependencies {
     //firebase
     implementation(libs.firebase.messaging)
     implementation(libs.firebase.firestore)
+    implementation (libs.retrofit)
+    implementation (libs.converter.gson)
+    implementation (libs.gson)
+    implementation (libs.okhttp)
 
     // Scalable size unit
     implementation(libs.sdp.android)
