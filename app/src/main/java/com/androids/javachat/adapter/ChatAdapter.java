@@ -29,6 +29,10 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.senderId = senderId;
     }
 
+    public void setReceiverProfileImage(Bitmap receiverProfileImage) {
+        this.receiverProfileImage = receiverProfileImage;
+    }
+
     @NonNull
     @Override
     public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {

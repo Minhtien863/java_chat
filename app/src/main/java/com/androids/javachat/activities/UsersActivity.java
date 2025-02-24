@@ -4,8 +4,6 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
 
-import androidx.appcompat.app.AppCompatActivity;
-
 import com.androids.javachat.adapter.UsersAdapter;
 import com.androids.javachat.databinding.ActivityUsersBinding;
 import com.androids.javachat.listener.Userlistener;
@@ -18,7 +16,7 @@ import com.google.firebase.firestore.QueryDocumentSnapshot;
 import java.util.ArrayList;
 import java.util.List;
 
-public class UsersActivity extends AppCompatActivity implements Userlistener {
+public class UsersActivity extends BaseActivity implements Userlistener {
 
     private ActivityUsersBinding binding;
     private PreferenceManager preferenceManager;
