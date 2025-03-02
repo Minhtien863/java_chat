@@ -24,6 +24,7 @@ import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.QuerySnapshot;
 import com.androids.javachat.Networks.ApiClient;
 import com.androids.javachat.Networks.ApiService;
+import com.google.gson.Gson;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -45,7 +46,7 @@ public class ChatActivity extends BaseActivity {
     private List<ChatMessage> chatMessages;
     private ChatAdapter chatAdapter;
     private PreferenceManager preferenceManager;
-    private FirebaseFirestore db;
+    private FirebaseFirestore db = FirebaseFirestore.getInstance();
     private String conversionId = null;
     private Boolean isReceiverOnline = false;
 
@@ -69,7 +70,6 @@ public class ChatActivity extends BaseActivity {
                 preferenceManager.getString(Constant.KEY_USER_ID)
         );
         binding.chatView.setAdapter(chatAdapter);
-        db = FirebaseFirestore.getInstance();
     }
 
     private void listenMessage() {
@@ -91,7 +91,12 @@ public class ChatActivity extends BaseActivity {
         message.put(Constant.KEY_MESSAGE, messageText);
         message.put(Constant.KEY_TIMESTAMP, new Date());
         db.collection(Constant.KEY_COLLECTION_CHAT).add(message).addOnSuccessListener(documentReference -> {
-            sendNotificationToReceiver(messageText);
+            // Kiểm tra và lấy token trước khi gửi thông báo
+            if (receiverUser.token == null) {
+                fetchReceiverFcmTokenFromFirestoreAndSend(messageText);
+            } else {
+                sendNotificationToReceiver(messageText);
+            }
         }).addOnFailureListener(e -> {
             Log.e("Firestore", "Failed to send message: " + e.getMessage());
         });
@@ -111,12 +116,29 @@ public class ChatActivity extends BaseActivity {
             addConversion(conversion);
         }
     }
+    private void fetchReceiverFcmTokenFromFirestoreAndSend(String messageText) {
+        db.collection(Constant.KEY_COLLECTION_USERS)
+                .document(receiverUser.id)
+                .get()
+                .addOnCompleteListener(task -> {
+                    if (task.isSuccessful() && task.getResult() != null) {
+                        DocumentSnapshot document = task.getResult();
+                        receiverUser.token = document.getString("fcmtoken");
+                        if (receiverUser.token != null && !receiverUser.token.isEmpty()) {
+                            sendNotificationToReceiver(messageText);
+                        } else {
+                            Log.e("FCM_TEST", "FCM token still not found for receiver after fetch");
+                        }
+                    } else {
+                        Log.e("FCM_TEST", "Failed to fetch FCM token: " + task.getException());
+                    }
+                });
+    }
 
     private void sendNotificationToReceiver(String messageText) {
-        String token = preferenceManager.getFcmToken();
-        if (token != null) {
-            sendNotificationWithToken(token, messageText);
-        } else {
+        // Lấy access token từ PreferenceManager để gọi API
+        String accessToken = preferenceManager.getFcmToken();
+        if (accessToken == null) {
             preferenceManager.refreshFcmToken(new PreferenceManager.OnTokenRefreshListener() {
                 @Override
                 public void onTokenRefreshed(String newToken) {
@@ -128,35 +150,50 @@ public class ChatActivity extends BaseActivity {
                     Log.e("FCM", "Failed to refresh token: " + e.getMessage());
                 }
             });
+        } else {
+            sendNotificationWithToken(accessToken, messageText);
         }
     }
 
-    private void sendNotificationWithToken(String token, String messageText) {
-        // Lấy fcmtoken của chính bạn thay vì receiver để test
-        String myFcmToken = preferenceManager.getString("fcmtoken"); // Giả sử bạn lưu nó trong PreferenceManager
-        if (myFcmToken == null) {
-            Log.e("FCM_TEST", "FCM token not found for current user");
+    private void sendNotificationWithToken(String accessToken, String messageText) {
+        if (receiverUser.token == null || receiverUser.token.isEmpty()) {
+            Log.e("FCM_TEST", "FCM token not found for receiver");
             return;
         }
 
-        MessageRequest.Notification notification =
-                new MessageRequest.Notification(
-                        "Test Notification from " + preferenceManager.getString(Constant.KEY_NAME),
-                        messageText
-                );
-        MessageRequest.Message messageData =
-                new MessageRequest.Message(myFcmToken, notification);
-        MessageRequest request = new MessageRequest(messageData);
+        String notificationBody = preferenceManager.getString(Constant.KEY_NAME) + ": " + messageText;
 
-        ApiService apiService = ApiClient.getApiService(token);
+        HashMap<String, String> data = new HashMap<>();
+        data.put("title", "Chat Notification");
+        data.put("body", notificationBody);
+        data.put("senderId", preferenceManager.getString(Constant.KEY_USER_ID));
+        data.put("senderName", preferenceManager.getString(Constant.KEY_NAME));
+
+        Log.d("FCM_TEST", "Receiver token: " + receiverUser.token);
+
+        // Tạo JSON thủ công
+        HashMap<String, Object> message = new HashMap<>();
+        message.put("token", receiverUser.token);
+        message.put("data", data);
+        HashMap<String, Object> requestMap = new HashMap<>();
+        requestMap.put("message", message);
+
+        String jsonRequest = new Gson().toJson(requestMap);
+        Log.d("FCM_TEST", "Sending request: " + jsonRequest);
+
+        // Tạo MessageRequest từ JSON thủ công
+        MessageRequest request = new MessageRequest(new MessageRequest.Message(receiverUser.token, data));
+
+        ApiService apiService = ApiClient.getApiService(accessToken);
         Call<MessageResponse> call = apiService.sendNotification(request);
         call.enqueue(new Callback<MessageResponse>() {
             @Override
             public void onResponse(Call<MessageResponse> call, Response<MessageResponse> response) {
                 if (response.isSuccessful() && response.body() != null) {
-                    Log.d("FCM_TEST", "Notification sent successfully with ID: " + response.body().getMessageId());
+                    Log.d("FCM_TEST", "Notification sent successfully: " + response.body().toString());
                 } else {
-                    Log.e("FCM_TEST", "Failed to send: " + response.code() + " - " + response.message());
+                    Log.e("FCM_TEST", "Failed to send: " + response.code() + " - " + response.raw().toString());
+                    Log.e("FCM_TEST", "Request body: " + new Gson().toJson(request));
                 }
             }
 
@@ -232,6 +269,45 @@ public class ChatActivity extends BaseActivity {
     private void loadReciverDetails() {
         receiverUser = (User) getIntent().getSerializableExtra(Constant.KEY_USER);
         binding.txtName.setText(receiverUser.name);
+
+        // Nếu token hoặc image không có, lấy từ Firestore
+        if (receiverUser.token == null || receiverUser.image == null) {
+            fetchReceiverDetailsFromFirestore();
+        } else {
+            // Nếu đã có image, dùng trực tiếp
+            chatAdapter = new ChatAdapter(
+                    chatMessages,
+                    getBitmapFromEncodedString(receiverUser.image),
+                    preferenceManager.getString(Constant.KEY_USER_ID)
+            );
+            binding.chatView.setAdapter(chatAdapter);
+        }
+    }
+
+    private void fetchReceiverDetailsFromFirestore() {
+        db.collection(Constant.KEY_COLLECTION_USERS)
+                .document(receiverUser.id)
+                .get()
+                .addOnCompleteListener(task -> {
+                    if (task.isSuccessful() && task.getResult() != null) {
+                        DocumentSnapshot document = task.getResult();
+                        if (receiverUser.token == null) {
+                            receiverUser.token = document.getString("fcmtoken");
+                        }
+                        if (receiverUser.image == null) {
+                            receiverUser.image = document.getString(Constant.KEY_IMAGE);
+                        }
+                        // Cập nhật adapter với ảnh mới
+                        chatAdapter = new ChatAdapter(
+                                chatMessages,
+                                getBitmapFromEncodedString(receiverUser.image),
+                                preferenceManager.getString(Constant.KEY_USER_ID)
+                        );
+                        binding.chatView.setAdapter(chatAdapter);
+                    } else {
+                        Log.e("FCM_TEST", "Failed to fetch receiver details: " + task.getException());
+                    }
+                });
     }
 
     private void setListener() {

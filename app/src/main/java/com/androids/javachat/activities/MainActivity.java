@@ -141,11 +141,16 @@ public class MainActivity extends BaseActivity implements ConversionListener {
     private void updateToken(String token) {
         preferenceManager.putString(Constant.KEY_FCM_TOKEN, token);
         FirebaseFirestore db = FirebaseFirestore.getInstance();
-        DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_USERS)
-                .document(preferenceManager.getString(Constant.KEY_USER_ID)
-                );
-        documentReference.update(Constant.KEY_FCM_TOKEN, token)
-                .addOnFailureListener(e -> showToast("Unable to update"));
+        String userId = preferenceManager.getString(Constant.KEY_USER_ID);
+        if (userId != null) {
+            DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_USERS)
+                    .document(userId);
+            documentReference.update(Constant.KEY_FCM_TOKEN, token)
+                    .addOnSuccessListener(unused -> showToast("Token updated successfully"))
+                    .addOnFailureListener(e -> showToast("Unable to update token: " + e.getMessage()));
+        } else {
+            showToast("User ID not found");
+        }
     }
 
     private void signOut() {

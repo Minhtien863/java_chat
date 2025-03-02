@@ -19,6 +19,7 @@ import com.androids.javachat.databinding.ActivitySignUpBinding;
 import com.androids.javachat.utilities.Constant;
 import com.androids.javachat.utilities.PreferenceManager;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.messaging.FirebaseMessaging;
 
 import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
@@ -40,7 +41,7 @@ public class SignUpActivity extends AppCompatActivity {
         setListener();
     }
 
-    private void setListener(){
+    private void setListener() {
         binding.txtSignUp.setOnClickListener(v -> onBackPressed());
         binding.btnSignUp.setOnClickListener(v -> {
             if (isValidSignUpDetails()) {
@@ -67,23 +68,33 @@ public class SignUpActivity extends AppCompatActivity {
         user.put(Constant.KEY_EMAIL, binding.inputEmail.getText().toString());
         user.put(Constant.KEY_PASSWORD, binding.inputPassword.getText().toString());
         user.put(Constant.KEY_IMAGE, encodedImage);
-        db.collection(Constant.KEY_COLLECTION_USERS)
-                .add(user)
-                .addOnSuccessListener(documentReference -> {
-                    loading(false);
-                    preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, true);
-                    preferenceManager.putString(Constant.KEY_USER_ID, documentReference.getId());
-                    preferenceManager.putString(Constant.KEY_NAME, binding.inputName.getText().toString());
-                    preferenceManager.putString(Constant.KEY_IMAGE, encodedImage);
-                    Intent intent = new Intent(getApplicationContext(), MainActivity.class);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                    startActivity(intent);
-                })
-                .addOnFailureListener(exception -> {
-                    loading(false);
-                    showToast(exception.getMessage());
-                });
 
+        // Lấy FCM token và thêm vào user trước khi lưu
+        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(task -> {
+            if (task.isSuccessful() && task.getResult() != null) {
+                String fcmToken = task.getResult();
+                user.put(Constant.KEY_FCM_TOKEN, fcmToken); // Thêm FCM token vào dữ liệu người dùng
+                preferenceManager.putString(Constant.KEY_FCM_TOKEN, fcmToken); // Lưu vào PreferenceManager
+            }
+
+            // Tiến hành lưu user vào Firestore
+            db.collection(Constant.KEY_COLLECTION_USERS)
+                    .add(user)
+                    .addOnSuccessListener(documentReference -> {
+                        loading(false);
+                        preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, true);
+                        preferenceManager.putString(Constant.KEY_USER_ID, documentReference.getId());
+                        preferenceManager.putString(Constant.KEY_NAME, binding.inputName.getText().toString());
+                        preferenceManager.putString(Constant.KEY_IMAGE, encodedImage);
+                        Intent intent = new Intent(getApplicationContext(), MainActivity.class);
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                        startActivity(intent);
+                    })
+                    .addOnFailureListener(exception -> {
+                        loading(false);
+                        showToast(exception.getMessage());
+                    });
+        });
     }
 
     private String encodeImage(Bitmap bitmap) {

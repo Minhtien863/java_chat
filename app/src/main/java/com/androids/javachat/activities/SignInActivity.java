@@ -13,6 +13,7 @@ import com.androids.javachat.utilities.Constant;
 import com.androids.javachat.utilities.PreferenceManager;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.messaging.FirebaseMessaging;
 
 public class SignInActivity extends AppCompatActivity {
 
@@ -37,13 +38,13 @@ public class SignInActivity extends AppCompatActivity {
         binding.txtCreateNewAccount.setOnClickListener(v ->
                 startActivity(new Intent(getApplicationContext(), SignUpActivity.class)));
         binding.btnSignIn.setOnClickListener(v -> {
-            if (isValidSignInDetails()){
+            if (isValidSignInDetails()) {
                 signIn();
             }
         });
     }
 
-    private void signIn(){
+    private void signIn() {
         loading(true);
         FirebaseFirestore db = FirebaseFirestore.getInstance();
         db.collection(Constant.KEY_COLLECTION_USERS)
@@ -51,12 +52,24 @@ public class SignInActivity extends AppCompatActivity {
                 .whereEqualTo(Constant.KEY_PASSWORD, binding.inputPassword.getText().toString())
                 .get()
                 .addOnCompleteListener(task -> {
-                    if(task.isSuccessful() && task.getResult() != null && !task.getResult().getDocuments().isEmpty()){
+                    if (task.isSuccessful() && task.getResult() != null && !task.getResult().getDocuments().isEmpty()) {
                         DocumentSnapshot documentSnapshot = task.getResult().getDocuments().get(0);
                         preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, true);
                         preferenceManager.putString(Constant.KEY_USER_ID, documentSnapshot.getId());
                         preferenceManager.putString(Constant.KEY_NAME, documentSnapshot.getString(Constant.KEY_NAME));
                         preferenceManager.putString(Constant.KEY_IMAGE, documentSnapshot.getString(Constant.KEY_IMAGE));
+
+                        // Cập nhật FCM token sau khi đăng nhập
+                        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(tokenTask -> {
+                            if (tokenTask.isSuccessful() && tokenTask.getResult() != null) {
+                                String fcmToken = tokenTask.getResult();
+                                preferenceManager.putString(Constant.KEY_FCM_TOKEN, fcmToken);
+                                db.collection(Constant.KEY_COLLECTION_USERS)
+                                        .document(documentSnapshot.getId())
+                                        .update(Constant.KEY_FCM_TOKEN, fcmToken);
+                            }
+                        });
+
                         Intent intent = new Intent(getApplicationContext(), MainActivity.class);
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                         startActivity(intent);
@@ -68,16 +81,16 @@ public class SignInActivity extends AppCompatActivity {
     }
 
     private void loading(Boolean isLoading) {
-        if (isLoading){
+        if (isLoading) {
             binding.btnSignIn.setVisibility(View.INVISIBLE);
-            binding.progressBar.setVisibility(View.INVISIBLE);
+            binding.progressBar.setVisibility(View.VISIBLE); // Sửa lỗi: hiển thị progressBar khi loading
         } else {
             binding.progressBar.setVisibility(View.INVISIBLE);
             binding.btnSignIn.setVisibility(View.VISIBLE);
         }
     }
 
-    private void showToast (String message) {
+    private void showToast(String message) {
         Toast.makeText(getApplicationContext(), message, Toast.LENGTH_SHORT).show();
     }
 
