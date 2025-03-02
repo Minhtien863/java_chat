@@ -1,21 +1,21 @@
 [versions]
 agp = "8.8.0"
-gson = "2.11.0"
+firebaseBom = "33.10.0"
+gson = "2.12.1"
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
 appcompat = "1.7.0"
 material = "1.12.0"
-activity = "1.10.0"
-constraintlayout = "2.2.0"
+activity = "1.10.1"
+constraintlayout = "2.2.1"
 multidex = "2.0.1"
 okhttp = "4.12.0"
 retrofit = "2.9.0"
 roundedimageview = "2.3.0"
 sdpAndroid = "1.1.1"
 sspAndroid = "1.1.1"
-firebaseMessaging = "24.1.0"
-firebaseFirestore = "25.1.2"
+playServicesTasks = "18.2.0"
 
 [libraries]
 converter-gson = { module = "com.squareup.retrofit2:converter-gson", version.ref = "retrofit" }
@@ -33,9 +33,7 @@ retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit
 roundedimageview = { module = "com.makeramen:roundedimageview", version.ref = "roundedimageview" }
 sdp-android = { module = "com.intuit.sdp:sdp-android", version.ref = "sdpAndroid" }
 ssp-android = { module = "com.intuit.ssp:ssp-android", version.ref = "sspAndroid" }
-firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging", version.ref = "firebaseMessaging" }
-firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore", version.ref = "firebaseFirestore" }
+play-services-tasks = { group = "com.google.android.gms", name = "play-services-tasks", version.ref = "playServicesTasks" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-

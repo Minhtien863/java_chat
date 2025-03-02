@@ -27,11 +27,18 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures {
         viewBinding = true
+    }
+
+    packaging {
+        resources {
+            pickFirsts.add("META-INF/INDEX.LIST")
+            pickFirsts.add("META-INF/DEPENDENCIES")
+        }
     }
 }
 
@@ -40,17 +47,27 @@ dependencies {
     implementation(libs.material)
     implementation(libs.activity)
     implementation(libs.constraintlayout)
+    implementation(libs.play.services.tasks)
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
 
     //firebase
-    implementation(libs.firebase.messaging)
-    implementation(libs.firebase.firestore)
+// Firebase
+    implementation(platform("com.google.firebase:firebase-bom:33.10.0"))
+    implementation("com.google.firebase:firebase-messaging")
+    implementation("com.google.firebase:firebase-firestore") {
+        exclude(group = "com.google.protobuf", module = "protobuf-lite")
+    }
+    // Sửa Google Auth để dùng BOM
+    implementation("com.google.auth:google-auth-library-oauth2-http:1.33.1")
     implementation (libs.retrofit)
     implementation (libs.converter.gson)
     implementation (libs.gson)
     implementation (libs.okhttp)
+    implementation("io.grpc:grpc-okhttp:1.68.0")
+    implementation("io.grpc:grpc-protobuf-lite:1.68.0")
+    implementation("io.grpc:grpc-stub:1.68.0")
 
     // Scalable size unit
     implementation(libs.sdp.android)

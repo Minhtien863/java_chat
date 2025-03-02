@@ -25,7 +25,6 @@ import com.google.firebase.firestore.QuerySnapshot;
 import com.androids.javachat.Networks.ApiClient;
 import com.androids.javachat.Networks.ApiService;
 
-
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -49,7 +48,6 @@ public class ChatActivity extends BaseActivity {
     private FirebaseFirestore db;
     private String conversionId = null;
     private Boolean isReceiverOnline = false;
-    private String accessToken = "ya29.c.c0ASRK0Gat_MTSlUfb4uTnuuTTxTveAklMp7mlctLOwEgfHKVrt4XElQj7eg5FYFze8JNr9aJ0yXB1Jc7GDYbuZ7Dw7443QbZ6wwDtL173pFub-UiHYSIfWbIMfpvIWe52QX6PZx02sA7ZM3mJ3TENLNlOd7-1xvAXxyiH4DBSh8tTNYvAB600fEiQTqP1Zhxcmyl8FGirRotennuy1um8NjizOpdgScET7AQRRJ0uSfK1Y9uc8yr-Gltaz9Jx-vECruUCbLOX3zMc0fi_V2U7Mrli3pcisMkY7CIJ5e3TpqwPCLaEOExPKi7wUTkobv2Qj1KfhDQ2WJBnv1w2xiHoX_j078IpujQp_RpWbWf9YagMhI0RM-Scr9qhGwN387Phw4vs_cVpFi36t5ryiM11tzUebxp1Yhi13Wvnu7RXspbiI50f2UUoIYZ_46i3J1rtUe7eOR4py9FxY7alonXsJOptuv2wfnZ1qvwMb73VgWigIBvVhMj8zosfzOwQnM0bUf2gZs4qbbqSY3vWc6QQo6Ode0txnOsv2JUtkribdkeRz5ef5XRYnbq2rXFBm7eMBYme1lrOqF16IxSxo4eMWjn9bi-i-8ypaaihj5iBnljuemmXYz-0v8spgOXY_k7sb8g985xse_lI6bJ5US5WbMFXj4IsX74jbtjROhR9cqfkr4Z2Uy9vda54FrZfsw58zsJQOZmOznMdZZthJogkO0JMWf87W-dsa138grx1uJY7mxce34anRmzkrqxBWR5llqMiufd1Sft7dl8J5hnSs0M0f43UvYigioy_x0zjyQFmkeamurpfYxy1YcQ0s2Vp5xv-bWan2O85bpgR1xSVmicXwInIn0zqfQgvRt3WYqm6hcYF0yOwyucBcJqd_klbOy4hdBjzoBXlmXBxd35uunWbQkn53hdFes0JboinViMRMbg01Wy09n23Z60Fy9YifQ0tXYh66V2UVcq0ufzi8kRmVJB9Y66tB7Qxy-7jgrI_xnaZ_uqsZgi";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -90,7 +88,7 @@ public class ChatActivity extends BaseActivity {
         String messageText = binding.inputMessage.getText().toString();
         message.put(Constant.KEY_SENDER_ID, preferenceManager.getString(Constant.KEY_USER_ID));
         message.put(Constant.KEY_RECEIVER_ID, receiverUser.id);
-        message.put(Constant.KEY_MESSAGE, binding.inputMessage.getText().toString());
+        message.put(Constant.KEY_MESSAGE, messageText);
         message.put(Constant.KEY_TIMESTAMP, new Date());
         db.collection(Constant.KEY_COLLECTION_CHAT).add(message).addOnSuccessListener(documentReference -> {
             sendNotificationToReceiver(messageText);
@@ -112,54 +110,61 @@ public class ChatActivity extends BaseActivity {
             conversion.put(Constant.KEY_TIMESTAMP, new Date());
             addConversion(conversion);
         }
-
     }
 
     private void sendNotificationToReceiver(String messageText) {
-        db.collection(Constant.KEY_COLLECTION_USERS)
-                .document(receiverUser.id)
-                .get()
-                .addOnSuccessListener(documentSnapshot -> {
-                    if (documentSnapshot.exists()) {
-                        String receiverToken = documentSnapshot.getString("fcmtoken");
-                        if (receiverToken != null && !receiverToken.isEmpty()) {
-                            // Khai báo tường minh kiểu Notification
-                            MessageRequest.Notification notification =
-                                    new MessageRequest.Notification(
-                                            "New Message from " + preferenceManager.getString(Constant.KEY_NAME),
-                                            messageText
-                                    );
-                            // Tạo Message với notification
-                            MessageRequest.Message messageData =
-                                    new MessageRequest.Message(receiverToken, notification);
-                            MessageRequest request = new MessageRequest(messageData);
+        String token = preferenceManager.getFcmToken();
+        if (token != null) {
+            sendNotificationWithToken(token, messageText);
+        } else {
+            preferenceManager.refreshFcmToken(new PreferenceManager.OnTokenRefreshListener() {
+                @Override
+                public void onTokenRefreshed(String newToken) {
+                    sendNotificationWithToken(newToken, messageText);
+                }
 
-                            // Gửi thông báo qua FCM
-                            ApiService apiService = ApiClient.getApiService(accessToken);
-                            Call<MessageResponse> call = apiService.sendNotification(request);
-                            call.enqueue(new Callback<MessageResponse>() {
-                                @Override
-                                public void onResponse(Call<MessageResponse> call, Response<MessageResponse> response) {
-                                    if (response.isSuccessful() && response.body() != null) {
-                                        Log.d("FCM", "Notification sent successfully with ID: " + response.body().getMessageId());
-                                    } else {
-                                        Log.e("FCM", "Failed to send: " + response.code() + " - " + response.message());
-                                    }
-                                }
+                @Override
+                public void onTokenRefreshFailed(Exception e) {
+                    Log.e("FCM", "Failed to refresh token: " + e.getMessage());
+                }
+            });
+        }
+    }
 
-                                @Override
-                                public void onFailure(Call<MessageResponse> call, Throwable t) {
-                                    Log.e("FCM", "Error: " + t.getMessage());
-                                }
-                            });
-                        } else {
-                            Log.w("FCM", "Receiver token is null or empty");
-                        }
-                    }
-                })
-                .addOnFailureListener(e -> {
-                    Log.e("Firestore", "Failed to get receiver token: " + e.getMessage());
-                });
+    private void sendNotificationWithToken(String token, String messageText) {
+        // Lấy fcmtoken của chính bạn thay vì receiver để test
+        String myFcmToken = preferenceManager.getString("fcmtoken"); // Giả sử bạn lưu nó trong PreferenceManager
+        if (myFcmToken == null) {
+            Log.e("FCM_TEST", "FCM token not found for current user");
+            return;
+        }
+
+        MessageRequest.Notification notification =
+                new MessageRequest.Notification(
+                        "Test Notification from " + preferenceManager.getString(Constant.KEY_NAME),
+                        messageText
+                );
+        MessageRequest.Message messageData =
+                new MessageRequest.Message(myFcmToken, notification);
+        MessageRequest request = new MessageRequest(messageData);
+
+        ApiService apiService = ApiClient.getApiService(token);
+        Call<MessageResponse> call = apiService.sendNotification(request);
+        call.enqueue(new Callback<MessageResponse>() {
+            @Override
+            public void onResponse(Call<MessageResponse> call, Response<MessageResponse> response) {
+                if (response.isSuccessful() && response.body() != null) {
+                    Log.d("FCM_TEST", "Notification sent successfully with ID: " + response.body().getMessageId());
+                } else {
+                    Log.e("FCM_TEST", "Failed to send: " + response.code() + " - " + response.message());
+                }
+            }
+
+            @Override
+            public void onFailure(Call<MessageResponse> call, Throwable t) {
+                Log.e("FCM_TEST", "Error: " + t.getMessage());
+            }
+        });
     }
 
     private void listenAvailability() {
