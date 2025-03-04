@@ -55,6 +55,7 @@ public class ChatActivity extends BaseActivity {
         super.onCreate(savedInstanceState);
         binding = ActivityChatBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
+        preferenceManager = new PreferenceManager(getApplicationContext());
         setListener();
         loadReciverDetails();
         init();
@@ -62,25 +63,14 @@ public class ChatActivity extends BaseActivity {
     }
 
     private void init() {
-        preferenceManager = new PreferenceManager(getApplicationContext());
         chatMessages = new ArrayList<>();
-        chatAdapter = new ChatAdapter(
-                chatMessages,
-                getBitmapFromEncodedString(receiverUser.image),
-                preferenceManager.getString(Constant.KEY_USER_ID)
-        );
+        chatAdapter = new ChatAdapter(chatMessages, getBitmapFromEncodedString(receiverUser.image), preferenceManager.getString(Constant.KEY_USER_ID));
         binding.chatView.setAdapter(chatAdapter);
     }
 
     private void listenMessage() {
-        db.collection(Constant.KEY_COLLECTION_CHAT)
-                .whereEqualTo(Constant.KEY_SENDER_ID, preferenceManager.getString(Constant.KEY_USER_ID))
-                .whereEqualTo(Constant.KEY_RECEIVER_ID, receiverUser.id)
-                .addSnapshotListener(eventListener);
-        db.collection(Constant.KEY_COLLECTION_CHAT)
-                .whereEqualTo(Constant.KEY_SENDER_ID, receiverUser.id)
-                .whereEqualTo(Constant.KEY_RECEIVER_ID, preferenceManager.getString(Constant.KEY_USER_ID))
-                .addSnapshotListener(eventListener);
+        db.collection(Constant.KEY_COLLECTION_CHAT).whereEqualTo(Constant.KEY_SENDER_ID, preferenceManager.getString(Constant.KEY_USER_ID)).whereEqualTo(Constant.KEY_RECEIVER_ID, receiverUser.id).addSnapshotListener(eventListener);
+        db.collection(Constant.KEY_COLLECTION_CHAT).whereEqualTo(Constant.KEY_SENDER_ID, receiverUser.id).whereEqualTo(Constant.KEY_RECEIVER_ID, preferenceManager.getString(Constant.KEY_USER_ID)).addSnapshotListener(eventListener);
     }
 
     private void sendMessage() {
@@ -116,23 +106,21 @@ public class ChatActivity extends BaseActivity {
             addConversion(conversion);
         }
     }
+
     private void fetchReceiverFcmTokenFromFirestoreAndSend(String messageText) {
-        db.collection(Constant.KEY_COLLECTION_USERS)
-                .document(receiverUser.id)
-                .get()
-                .addOnCompleteListener(task -> {
-                    if (task.isSuccessful() && task.getResult() != null) {
-                        DocumentSnapshot document = task.getResult();
-                        receiverUser.token = document.getString("fcmtoken");
-                        if (receiverUser.token != null && !receiverUser.token.isEmpty()) {
-                            sendNotificationToReceiver(messageText);
-                        } else {
-                            Log.e("FCM_TEST", "FCM token still not found for receiver after fetch");
-                        }
-                    } else {
-                        Log.e("FCM_TEST", "Failed to fetch FCM token: " + task.getException());
-                    }
-                });
+        db.collection(Constant.KEY_COLLECTION_USERS).document(receiverUser.id).get().addOnCompleteListener(task -> {
+            if (task.isSuccessful() && task.getResult() != null) {
+                DocumentSnapshot document = task.getResult();
+                receiverUser.token = document.getString("fcmtoken");
+                if (receiverUser.token != null && !receiverUser.token.isEmpty()) {
+                    sendNotificationToReceiver(messageText);
+                } else {
+                    Log.e("FCM_TEST", "FCM token still not found for receiver after fetch");
+                }
+            } else {
+                Log.e("FCM_TEST", "Failed to fetch FCM token: " + task.getException());
+            }
+        });
     }
 
     private void sendNotificationToReceiver(String messageText) {
@@ -205,24 +193,22 @@ public class ChatActivity extends BaseActivity {
     }
 
     private void listenAvailability() {
-        db.collection(Constant.KEY_COLLECTION_USERS)
-                .document(receiverUser.id)
-                .addSnapshotListener(ChatActivity.this, (value, error) -> {
-                    if (error != null) {
-                        return;
-                    }
-                    if (value != null) {
-                        if (value.getLong(Constant.KEY_AVAILABILITY) != null) {
-                            int availability = Objects.requireNonNull(value.getLong(Constant.KEY_AVAILABILITY)).intValue();
-                            isReceiverOnline = availability == 1;
-                        }
-                    }
-                    if (isReceiverOnline) {
-                        binding.txtAvail.setVisibility(View.VISIBLE);
-                    } else {
-                        binding.txtAvail.setVisibility(View.GONE);
-                    }
-                });
+        db.collection(Constant.KEY_COLLECTION_USERS).document(receiverUser.id).addSnapshotListener(ChatActivity.this, (value, error) -> {
+            if (error != null) {
+                return;
+            }
+            if (value != null) {
+                if (value.getLong(Constant.KEY_AVAILABILITY) != null) {
+                    int availability = Objects.requireNonNull(value.getLong(Constant.KEY_AVAILABILITY)).intValue();
+                    isReceiverOnline = availability == 1;
+                }
+            }
+            if (isReceiverOnline) {
+                binding.txtAvail.setVisibility(View.VISIBLE);
+            } else {
+                binding.txtAvail.setVisibility(View.GONE);
+            }
+        });
     }
 
     private final EventListener<QuerySnapshot> eventListener = (value, error) -> {
@@ -268,46 +254,36 @@ public class ChatActivity extends BaseActivity {
 
     private void loadReciverDetails() {
         receiverUser = (User) getIntent().getSerializableExtra(Constant.KEY_USER);
+        if (receiverUser == null) {
+            Log.e("ChatActivity", "Receiver user is null, finishing activity");
+            finish(); // Thoát nếu không có dữ liệu người nhận
+            return;
+        }
         binding.txtName.setText(receiverUser.name);
 
         // Nếu token hoặc image không có, lấy từ Firestore
         if (receiverUser.token == null || receiverUser.image == null) {
             fetchReceiverDetailsFromFirestore();
-        } else {
-            // Nếu đã có image, dùng trực tiếp
-            chatAdapter = new ChatAdapter(
-                    chatMessages,
-                    getBitmapFromEncodedString(receiverUser.image),
-                    preferenceManager.getString(Constant.KEY_USER_ID)
-            );
-            binding.chatView.setAdapter(chatAdapter);
         }
     }
 
     private void fetchReceiverDetailsFromFirestore() {
-        db.collection(Constant.KEY_COLLECTION_USERS)
-                .document(receiverUser.id)
-                .get()
-                .addOnCompleteListener(task -> {
-                    if (task.isSuccessful() && task.getResult() != null) {
-                        DocumentSnapshot document = task.getResult();
-                        if (receiverUser.token == null) {
-                            receiverUser.token = document.getString("fcmtoken");
-                        }
-                        if (receiverUser.image == null) {
-                            receiverUser.image = document.getString(Constant.KEY_IMAGE);
-                        }
-                        // Cập nhật adapter với ảnh mới
-                        chatAdapter = new ChatAdapter(
-                                chatMessages,
-                                getBitmapFromEncodedString(receiverUser.image),
-                                preferenceManager.getString(Constant.KEY_USER_ID)
-                        );
-                        binding.chatView.setAdapter(chatAdapter);
-                    } else {
-                        Log.e("FCM_TEST", "Failed to fetch receiver details: " + task.getException());
-                    }
-                });
+        db.collection(Constant.KEY_COLLECTION_USERS).document(receiverUser.id).get().addOnCompleteListener(task -> {
+            if (task.isSuccessful() && task.getResult() != null) {
+                DocumentSnapshot document = task.getResult();
+                if (receiverUser.token == null) {
+                    receiverUser.token = document.getString("fcmtoken");
+                }
+                if (receiverUser.image == null) {
+                    receiverUser.image = document.getString(Constant.KEY_IMAGE);
+                }
+                // Cập nhật adapter
+                chatAdapter = new ChatAdapter(chatMessages, getBitmapFromEncodedString(receiverUser.image), preferenceManager.getString(Constant.KEY_USER_ID));
+                binding.chatView.setAdapter(chatAdapter);
+            } else {
+                Log.e("FCM_TEST", "Failed to fetch receiver details: " + task.getException());
+            }
+        });
     }
 
     private void setListener() {
@@ -320,39 +296,23 @@ public class ChatActivity extends BaseActivity {
     }
 
     private void updateConversion(String message) {
-        DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_CONVERSATIONS)
-                .document(conversionId);
-        documentReference.update(
-                Constant.KEY_LAST_MESSAGE, message,
-                Constant.KEY_TIMESTAMP, new Date()
-        );
+        DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_CONVERSATIONS).document(conversionId);
+        documentReference.update(Constant.KEY_LAST_MESSAGE, message, Constant.KEY_TIMESTAMP, new Date());
     }
 
     private void addConversion(HashMap<String, Object> conversion) {
-        db.collection(Constant.KEY_COLLECTION_CONVERSATIONS)
-                .add(conversion)
-                .addOnSuccessListener(documentReference -> conversionId = documentReference.getId());
+        db.collection(Constant.KEY_COLLECTION_CONVERSATIONS).add(conversion).addOnSuccessListener(documentReference -> conversionId = documentReference.getId());
     }
 
     private void checkForConversion() {
         if (chatMessages.size() != 0) {
-            checkForConversionRemotely(
-                    preferenceManager.getString(Constant.KEY_USER_ID),
-                    receiverUser.id
-            );
-            checkForConversionRemotely(
-                    receiverUser.id,
-                    preferenceManager.getString(Constant.KEY_USER_ID)
-            );
+            checkForConversionRemotely(preferenceManager.getString(Constant.KEY_USER_ID), receiverUser.id);
+            checkForConversionRemotely(receiverUser.id, preferenceManager.getString(Constant.KEY_USER_ID));
         }
     }
 
     private void checkForConversionRemotely(String senderId, String receiverId) {
-        db.collection(Constant.KEY_COLLECTION_CONVERSATIONS)
-                .whereEqualTo(Constant.KEY_SENDER_ID, senderId)
-                .whereEqualTo(Constant.KEY_RECEIVER_ID, receiverId)
-                .get()
-                .addOnCompleteListener(conversionOnCompleteListener);
+        db.collection(Constant.KEY_COLLECTION_CONVERSATIONS).whereEqualTo(Constant.KEY_SENDER_ID, senderId).whereEqualTo(Constant.KEY_RECEIVER_ID, receiverId).get().addOnCompleteListener(conversionOnCompleteListener);
     }
 
     private final OnCompleteListener<QuerySnapshot> conversionOnCompleteListener = task -> {

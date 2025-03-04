@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Base64;
+import android.util.Log;
 import android.view.View;
 import android.widget.Toast;
 
@@ -82,6 +83,7 @@ public class MainActivity extends BaseActivity implements ConversionListener {
     }
 
     private void listenConversion() {
+        Log.d("MainActivity", "Listening to conversations for user: " + preferenceManager.getString(Constant.KEY_USER_ID));
         db.collection(Constant.KEY_COLLECTION_CONVERSATIONS)
                 .whereEqualTo(Constant.KEY_SENDER_ID, preferenceManager.getString(Constant.KEY_USER_ID))
                 .addSnapshotListener(eventListener);
@@ -170,6 +172,11 @@ public class MainActivity extends BaseActivity implements ConversionListener {
 
     @Override
     public void onConversionClicked(User user) {
+        if (user == null || user.id == null || user.name == null) {
+            Log.e("MainActivity", "Invalid user: " + (user == null ? "null" : "id or name missing"));
+            showToast("Không thể mở hội thoại: Dữ liệu người dùng không hợp lệ");
+            return;
+        }
         Intent intent = new Intent(getApplicationContext(), ChatActivity.class);
         intent.putExtra(Constant.KEY_USER, user);
         startActivity(intent);
