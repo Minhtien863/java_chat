@@ -13,6 +13,7 @@ import android.widget.Toast;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+
 import android.Manifest;
 
 import com.androids.javachat.adapter.RecentConversationsAdapter;
@@ -22,6 +23,7 @@ import com.androids.javachat.models.ChatMessage;
 import com.androids.javachat.models.User;
 import com.androids.javachat.utilities.Constant;
 import com.androids.javachat.utilities.PreferenceManager;
+import com.androids.javachat.utilities.SpaceItemDecoration;
 import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.EventListener;
@@ -36,7 +38,6 @@ import java.util.HashMap;
 import java.util.List;
 
 public class MainActivity extends BaseActivity implements ConversionListener {
-
 
     private static final int NOTIFICATION_PERMISSION_CODE = 1001;
     private ActivityMainBinding binding;
@@ -62,6 +63,9 @@ public class MainActivity extends BaseActivity implements ConversionListener {
         conversations = new ArrayList<>();
         conversationsAdapter = new RecentConversationsAdapter(conversations, this);
         binding.conversationsRecyclerView.setAdapter(conversationsAdapter);
+        // Thêm SpaceItemDecoration với khoảng cách 16dp
+        int spacingInPixels = (int) (16 * getResources().getDisplayMetrics().density); // 16dp
+        binding.conversationsRecyclerView.addItemDecoration(new SpaceItemDecoration(spacingInPixels));
         db = FirebaseFirestore.getInstance();
     }
 
@@ -191,7 +195,6 @@ public class MainActivity extends BaseActivity implements ConversionListener {
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-
             ActivityCompat.requestPermissions(this,
                     new String[]{Manifest.permission.POST_NOTIFICATIONS},
                     NOTIFICATION_PERMISSION_CODE);

@@ -17,8 +17,10 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.androids.javachat.databinding.ActivitySignUpBinding;
 import com.androids.javachat.utilities.Constant;
+import com.androids.javachat.utilities.PasswordUtils;
 import com.androids.javachat.utilities.PreferenceManager;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.QuerySnapshot;
 import com.google.firebase.messaging.FirebaseMessaging;
 
 import java.io.ByteArrayOutputStream;
@@ -31,6 +33,7 @@ public class SignUpActivity extends AppCompatActivity {
     private ActivitySignUpBinding binding;
     private String encodedImage;
     private PreferenceManager preferenceManager;
+    private FirebaseFirestore db;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,6 +41,7 @@ public class SignUpActivity extends AppCompatActivity {
         binding = ActivitySignUpBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
         preferenceManager = new PreferenceManager(getApplicationContext());
+        db = FirebaseFirestore.getInstance();
         setListener();
     }
 
@@ -56,45 +60,74 @@ public class SignUpActivity extends AppCompatActivity {
         });
     }
 
-    private void showToast(String message) {
-        Toast.makeText(getApplicationContext(), message, Toast.LENGTH_SHORT).show();
-    }
-
     private void signUp() {
         loading(true);
-        FirebaseFirestore db = FirebaseFirestore.getInstance();
-        HashMap<String, Object> user = new HashMap<>();
-        user.put(Constant.KEY_NAME, binding.inputName.getText().toString());
-        user.put(Constant.KEY_EMAIL, binding.inputEmail.getText().toString());
-        user.put(Constant.KEY_PASSWORD, binding.inputPassword.getText().toString());
-        user.put(Constant.KEY_IMAGE, encodedImage);
 
-        // Lấy FCM token và thêm vào user trước khi lưu
-        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(task -> {
-            if (task.isSuccessful() && task.getResult() != null) {
+        // Kiểm tra email trùng lặp
+        checkEmailExists(binding.inputEmail.getText().toString().trim(), () -> {
+            // Lấy FCM token
+            FirebaseMessaging.getInstance().getToken().addOnCompleteListener(task -> {
+                if (!task.isSuccessful() || task.getResult() == null) {
+                    loading(false);
+                    showToast("Không thể lấy FCM token, vui lòng thử lại");
+                    return;
+                }
+
                 String fcmToken = task.getResult();
-                user.put(Constant.KEY_FCM_TOKEN, fcmToken); // Thêm FCM token vào dữ liệu người dùng
-                preferenceManager.putString(Constant.KEY_FCM_TOKEN, fcmToken); // Lưu vào PreferenceManager
-            }
+                String password = binding.inputPassword.getText().toString().trim();
+                String salt = PasswordUtils.generateSalt(); // Tạo muối
+                String hashedPassword = PasswordUtils.hashPassword(password, salt); // Mã hóa mật khẩu
 
-            // Tiến hành lưu user vào Firestore
-            db.collection(Constant.KEY_COLLECTION_USERS)
-                    .add(user)
-                    .addOnSuccessListener(documentReference -> {
-                        loading(false);
-                        preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, true);
-                        preferenceManager.putString(Constant.KEY_USER_ID, documentReference.getId());
-                        preferenceManager.putString(Constant.KEY_NAME, binding.inputName.getText().toString());
-                        preferenceManager.putString(Constant.KEY_IMAGE, encodedImage);
-                        Intent intent = new Intent(getApplicationContext(), MainActivity.class);
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                        startActivity(intent);
-                    })
-                    .addOnFailureListener(exception -> {
-                        loading(false);
-                        showToast(exception.getMessage());
-                    });
+                HashMap<String, Object> user = new HashMap<>();
+                user.put(Constant.KEY_NAME, binding.inputName.getText().toString().trim());
+                user.put(Constant.KEY_EMAIL, binding.inputEmail.getText().toString().trim());
+                user.put(Constant.KEY_PASSWORD, hashedPassword); // Lưu mật khẩu đã mã hóa
+                user.put(Constant.KEY_SALT, salt); // Lưu muối
+                user.put(Constant.KEY_IMAGE, encodedImage);
+                user.put(Constant.KEY_FCM_TOKEN, fcmToken);
+
+                // Lưu user vào Firestore
+                db.collection(Constant.KEY_COLLECTION_USERS)
+                        .add(user)
+                        .addOnSuccessListener(documentReference -> {
+                            preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, true);
+                            preferenceManager.putString(Constant.KEY_USER_ID, documentReference.getId());
+                            preferenceManager.putString(Constant.KEY_NAME, binding.inputName.getText().toString().trim());
+                            preferenceManager.putString(Constant.KEY_IMAGE, encodedImage);
+                            preferenceManager.putString(Constant.KEY_FCM_TOKEN, fcmToken);
+                            loading(false);
+                            showToast("Đăng ký thành công!");
+                            Intent intent = new Intent(getApplicationContext(), MainActivity.class);
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                            startActivity(intent);
+                            finish();
+                        })
+                        .addOnFailureListener(exception -> {
+                            loading(false);
+                            showToast("Đăng ký thất bại: " + exception.getMessage());
+                        });
+            });
         });
+    }
+
+    private void checkEmailExists(String email, Runnable onSuccess) {
+        db.collection(Constant.KEY_COLLECTION_USERS)
+                .whereEqualTo(Constant.KEY_EMAIL, email)
+                .get()
+                .addOnCompleteListener(task -> {
+                    if (task.isSuccessful()) {
+                        QuerySnapshot querySnapshot = task.getResult();
+                        if (querySnapshot != null && !querySnapshot.isEmpty()) {
+                            loading(false);
+                            showToast("Email đã được sử dụng, vui lòng chọn email khác");
+                        } else {
+                            onSuccess.run();
+                        }
+                    } else {
+                        loading(false);
+                        showToast("Lỗi kiểm tra email: " + task.getException().getMessage());
+                    }
+                });
     }
 
     private String encodeImage(Bitmap bitmap) {
@@ -110,18 +143,17 @@ public class SignUpActivity extends AppCompatActivity {
     private final ActivityResultLauncher<Intent> pickImage = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
             result -> {
-                if (result.getResultCode() == RESULT_OK) {
-                    if (result.getData() != null) {
-                        Uri imageUri = result.getData().getData();
-                        try {
-                            InputStream inputStream = getContentResolver().openInputStream(imageUri);
-                            Bitmap bitmap = BitmapFactory.decodeStream(inputStream);
-                            binding.imageProfile.setImageBitmap(bitmap);
-                            binding.txtAddImage.setVisibility(View.GONE);
-                            encodedImage = encodeImage(bitmap);
-                        } catch (FileNotFoundException e) {
-                            e.printStackTrace();
-                        }
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    Uri imageUri = result.getData().getData();
+                    try {
+                        InputStream inputStream = getContentResolver().openInputStream(imageUri);
+                        Bitmap bitmap = BitmapFactory.decodeStream(inputStream);
+                        binding.imageProfile.setImageBitmap(bitmap);
+                        binding.txtAddImage.setVisibility(View.GONE);
+                        encodedImage = encodeImage(bitmap);
+                    } catch (FileNotFoundException e) {
+                        e.printStackTrace();
+                        showToast("Không thể tải ảnh, vui lòng thử lại");
                     }
                 }
             }
@@ -144,14 +176,13 @@ public class SignUpActivity extends AppCompatActivity {
             showToast("Vui lòng nhập mật khẩu");
             return false;
         } else if (binding.inputConfirmPassword.getText().toString().trim().isEmpty()) {
-            showToast("Mật khẩu không trùng khớp");
+            showToast("Vui lòng xác nhận mật khẩu");
             return false;
         } else if (!binding.inputPassword.getText().toString().equals(binding.inputConfirmPassword.getText().toString())) {
-            showToast("Xác nhận mật khẩu phải trùng khớp với mật khẩu");
+            showToast("Mật khẩu và xác nhận mật khẩu không khớp");
             return false;
-        } else {
-            return true;
         }
+        return true;
     }
 
     private void loading(boolean isLoading) {
@@ -162,5 +193,9 @@ public class SignUpActivity extends AppCompatActivity {
             binding.progressBar.setVisibility(View.INVISIBLE);
             binding.btnSignUp.setVisibility(View.VISIBLE);
         }
+    }
+
+    private void showToast(String message) {
+        Toast.makeText(getApplicationContext(), message, Toast.LENGTH_SHORT).show();
     }
 }

@@ -10,6 +10,7 @@ import com.androids.javachat.listener.Userlistener;
 import com.androids.javachat.models.User;
 import com.androids.javachat.utilities.Constant;
 import com.androids.javachat.utilities.PreferenceManager;
+import com.androids.javachat.utilities.SpaceItemDecoration;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
 
@@ -58,6 +59,10 @@ public class UsersActivity extends BaseActivity implements Userlistener {
                             users.add(user);
                         }
                         if (!users.isEmpty()) {
+                            // Thêm SpaceItemDecoration trước khi gán adapter
+                            int spacingInPixels = (int) (16 * getResources().getDisplayMetrics().density); // 16dp
+                            binding.userRecyclerview.addItemDecoration(new SpaceItemDecoration(spacingInPixels));
+
                             UsersAdapter usersAdapter = new UsersAdapter(users, this);
                             binding.userRecyclerview.setAdapter(usersAdapter);
                             binding.userRecyclerview.setVisibility(View.VISIBLE);

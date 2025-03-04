@@ -30,4 +30,6 @@ public class Constant {
     public static final String KEY_RECEIVER_IMG = "receiverImg";
     public static final String KEY_LAST_MESSAGE = "lastMessage";
     public static final String KEY_AVAILABILITY = "availability";
+
+    public static final String KEY_SALT = "salt";
 }
