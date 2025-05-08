@@ -59,6 +59,7 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore") {
         exclude(group = "com.google.protobuf", module = "protobuf-lite")
     }
+    implementation("com.google.firebase:firebase-auth")
     // Sửa Google Auth để dùng BOM
     implementation("com.google.auth:google-auth-library-oauth2-http:1.33.1")
     implementation (libs.retrofit)
@@ -79,4 +80,6 @@ dependencies {
     //Mutil
     implementation(libs.multidex)
 
+    //security
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 }

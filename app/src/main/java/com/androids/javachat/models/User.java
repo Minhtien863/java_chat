@@ -8,4 +8,5 @@ public class User implements Serializable {
     public String email;
     public String image;
     public String token;
+    public boolean isEmailVerified;
 }

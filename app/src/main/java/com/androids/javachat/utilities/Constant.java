@@ -5,7 +5,6 @@ public class Constant {
     public static final String KEY_COLLECTION_USERS = "users";
     public static final String KEY_NAME = "name";
     public static final String KEY_EMAIL = "email";
-    public static final String KEY_PASSWORD = "password";
     public static final String KEY_PREFERENCE_NAME = "chatAppPreference";
     public static final String KEY_SIGNED_IN = "isSignedIn";
     public static final String KEY_USER_ID = "userID";
@@ -30,6 +29,4 @@ public class Constant {
     public static final String KEY_RECEIVER_IMG = "receiverImg";
     public static final String KEY_LAST_MESSAGE = "lastMessage";
     public static final String KEY_AVAILABILITY = "availability";
-
-    public static final String KEY_SALT = "salt";
 }
