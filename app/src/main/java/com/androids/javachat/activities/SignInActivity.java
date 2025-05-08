@@ -15,8 +15,11 @@ import com.androids.javachat.utilities.PreferenceManager;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException;
 import com.google.firebase.auth.FirebaseAuthInvalidUserException;
+import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.messaging.FirebaseMessaging;
+
+import java.util.HashMap;
 
 public class SignInActivity extends AppCompatActivity {
 
@@ -34,11 +37,48 @@ public class SignInActivity extends AppCompatActivity {
         preferenceManager = new PreferenceManager(getApplicationContext());
         mAuth = FirebaseAuth.getInstance();
         db = FirebaseFirestore.getInstance();
-        if (preferenceManager.getBoolean(Constant.KEY_SIGNED_IN)) {
-            startActivity(new Intent(getApplicationContext(), MainActivity.class));
-            finish();
+        if (mAuth.getCurrentUser() != null && preferenceManager.getBoolean(Constant.KEY_SIGNED_IN)) {
+            checkSessionAndProceed();
         }
         setListeners();
+    }
+
+    private void checkSessionAndProceed() {
+        String userId = mAuth.getCurrentUser().getUid();
+        db.collection(Constant.KEY_COLLECTION_USERS)
+                .document(userId)
+                .get()
+                .addOnSuccessListener(documentSnapshot -> {
+                    if (documentSnapshot.exists()) {
+                        String storedToken = documentSnapshot.getString(Constant.KEY_FCM_TOKEN);
+                        String currentToken = preferenceManager.getFcmToken();
+                        if (storedToken != null && !storedToken.equals(currentToken)) {
+                            showToast("Tài khoản đang được đăng nhập trên thiết bị khác");
+                            logSessionEvent(userId, "session_conflict");
+                            mAuth.signOut();
+                            preferenceManager.clear();
+                            preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, false);
+                        } else {
+                            Intent intent = new Intent(getApplicationContext(), MainActivity.class);
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                            startActivity(intent);
+                            finish();
+                        }
+                    } else {
+                        showToast("Tài khoản không tồn tại trong Firestore");
+                        logSessionEvent(userId, "account_not_found");
+                        mAuth.signOut();
+                        preferenceManager.clear();
+                        preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, false);
+                    }
+                })
+                .addOnFailureListener(e -> {
+                    showToast("Lỗi kiểm tra phiên: " + e.getMessage());
+                    logSessionEvent(userId, "session_check_failed");
+                    mAuth.signOut();
+                    preferenceManager.clear();
+                    preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, false);
+                });
     }
 
     private void setListeners() {
@@ -46,9 +86,40 @@ public class SignInActivity extends AppCompatActivity {
                 startActivity(new Intent(getApplicationContext(), SignUpActivity.class)));
         binding.btnSignIn.setOnClickListener(v -> {
             if (!isProcessing && isValidSignInDetails()) {
-                signIn();
+                if (checkLoginAttempts()) {
+                    signIn();
+                } else {
+                    showToast("Đã vượt quá số lần thử đăng nhập, vui lòng thử lại sau 5 phút");
+                }
             }
         });
+    }
+
+    private boolean checkLoginAttempts() {
+        int attempts = preferenceManager.getString(Constant.KEY_LOGIN_ATTEMPTS) != null ?
+                Integer.parseInt(preferenceManager.getString(Constant.KEY_LOGIN_ATTEMPTS)) : 0;
+        long lastAttemptTime = preferenceManager.getString(Constant.KEY_ATTEMPT_TIMESTAMP) != null ?
+                Long.parseLong(preferenceManager.getString(Constant.KEY_ATTEMPT_TIMESTAMP)) : 0;
+        long currentTime = System.currentTimeMillis();
+
+        if (currentTime - lastAttemptTime > Constant.ATTEMPT_WINDOW) {
+            preferenceManager.putString(Constant.KEY_LOGIN_ATTEMPTS, "0");
+            preferenceManager.putString(Constant.KEY_ATTEMPT_TIMESTAMP, String.valueOf(currentTime));
+            return true;
+        }
+
+        if (attempts >= Constant.MAX_LOGIN_ATTEMPTS) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void incrementLoginAttempts() {
+        int attempts = preferenceManager.getString(Constant.KEY_LOGIN_ATTEMPTS) != null ?
+                Integer.parseInt(preferenceManager.getString(Constant.KEY_LOGIN_ATTEMPTS)) : 0;
+        preferenceManager.putString(Constant.KEY_LOGIN_ATTEMPTS, String.valueOf(attempts + 1));
+        preferenceManager.putString(Constant.KEY_ATTEMPT_TIMESTAMP, String.valueOf(System.currentTimeMillis()));
     }
 
     private void signIn() {
@@ -66,6 +137,7 @@ public class SignInActivity extends AppCompatActivity {
                                 loading(false);
                                 isProcessing = false;
                                 showToast("Vui lòng xác minh email trước khi đăng nhập");
+                                logSessionEvent(mAuth.getCurrentUser().getUid(), "email_not_verified");
                                 mAuth.signOut();
                                 return;
                             }
@@ -76,80 +148,90 @@ public class SignInActivity extends AppCompatActivity {
                                     .document(userId)
                                     .get()
                                     .addOnCompleteListener(userTask -> {
-                                        if (!userTask.isSuccessful()) {
+                                        if (!userTask.isSuccessful() || !userTask.getResult().exists()) {
                                             loading(false);
                                             isProcessing = false;
-                                            showToast("Lỗi kết nối, vui lòng kiểm tra mạng");
+                                            showToast("Tài khoản không tồn tại hoặc lỗi kết nối");
+                                            logSessionEvent(userId, "account_not_found");
                                             mAuth.signOut();
                                             return;
                                         }
-                                        if (userTask.getResult().exists()) {
-                                            db.collection(Constant.KEY_COLLECTION_USERS)
-                                                    .document(userId)
-                                                    .update("isEmailVerified", true)
-                                                    .addOnSuccessListener(aVoid -> {
-                                                        Log.d("SignInActivity", "Updated isEmailVerified to true for user: " + userId);
-                                                    })
-                                                    .addOnFailureListener(e -> {
-                                                        Log.e("SignInActivity", "Failed to update isEmailVerified: " + e.getMessage());
-                                                    });
+                                        DocumentSnapshot document = userTask.getResult();
+                                        db.collection(Constant.KEY_COLLECTION_USERS)
+                                                .document(userId)
+                                                .update("isEmailVerified", true)
+                                                .addOnSuccessListener(aVoid -> {
+                                                    Log.d("SignInActivity", "Updated isEmailVerified to true for user: " + userId);
+                                                })
+                                                .addOnFailureListener(e -> {
+                                                    Log.e("SignInActivity", "Failed to update isEmailVerified: " + e.getMessage());
+                                                });
 
-                                            db.collection(Constant.KEY_COLLECTION_USERS)
-                                                    .document(userId)
-                                                    .update(Constant.KEY_AVAILABILITY, 1)
-                                                    .addOnFailureListener(e -> {
-                                                        Log.e("SignInActivity", "Failed to update availability: " + e.getMessage());
-                                                    });
+                                        db.collection(Constant.KEY_COLLECTION_USERS)
+                                                .document(userId)
+                                                .update(Constant.KEY_AVAILABILITY, 1)
+                                                .addOnFailureListener(e -> {
+                                                    Log.e("SignInActivity", "Failed to update availability: " + e.getMessage());
+                                                });
 
-                                            FirebaseMessaging.getInstance().getToken().addOnCompleteListener(tokenTask -> {
-                                                String fcmToken = tokenTask.isSuccessful() ? tokenTask.getResult() : null;
-                                                if (fcmToken != null) {
-                                                    preferenceManager.putString(Constant.KEY_FCM_TOKEN, fcmToken);
-                                                    db.collection(Constant.KEY_COLLECTION_USERS)
-                                                            .document(userId)
-                                                            .update(Constant.KEY_FCM_TOKEN, fcmToken)
-                                                            .addOnFailureListener(e -> {
-                                                                Toast.makeText(this, "Cảnh báo: Không thể cập nhật FCM token", Toast.LENGTH_SHORT).show();
-                                                            });
-                                                } else {
-                                                    Toast.makeText(this, "Cảnh báo: Không thể lấy FCM token", Toast.LENGTH_SHORT).show();
-                                                }
+                                        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(tokenTask -> {
+                                            String fcmToken = tokenTask.isSuccessful() ? tokenTask.getResult() : null;
+                                            if (fcmToken != null) {
+                                                preferenceManager.saveFcmToken(fcmToken, System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000); // 7 days
+                                                db.collection(Constant.KEY_COLLECTION_USERS)
+                                                        .document(userId)
+                                                        .update(Constant.KEY_FCM_TOKEN, fcmToken)
+                                                        .addOnFailureListener(e -> {
+                                                            showToast("Cảnh báo: Không thể cập nhật FCM token");
+                                                        });
+                                            } else {
+                                                showToast("Cảnh báo: Không thể lấy FCM token");
+                                            }
 
-                                                preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, true);
-                                                preferenceManager.putString(Constant.KEY_USER_ID, userId);
-                                                preferenceManager.putString(Constant.KEY_NAME, userTask.getResult().getString(Constant.KEY_NAME));
-                                                preferenceManager.putString(Constant.KEY_EMAIL, userTask.getResult().getString(Constant.KEY_EMAIL));
-                                                preferenceManager.putString(Constant.KEY_IMAGE, userTask.getResult().getString(Constant.KEY_IMAGE));
-                                                loading(false);
-                                                isProcessing = false;
-                                                showToast("Đăng nhập thành công!");
-                                                Intent intent = new Intent(getApplicationContext(), MainActivity.class);
-                                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                                                startActivity(intent);
-                                                finish();
-                                            });
-                                        } else {
+                                            preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, true);
+                                            preferenceManager.putString(Constant.KEY_USER_ID, userId);
+                                            preferenceManager.putString(Constant.KEY_NAME, document.getString(Constant.KEY_NAME));
+                                            preferenceManager.putString(Constant.KEY_EMAIL, document.getString(Constant.KEY_EMAIL));
+                                            preferenceManager.putString(Constant.KEY_IMAGE, document.getString(Constant.KEY_IMAGE));
+                                            preferenceManager.putString(Constant.KEY_LOGIN_ATTEMPTS, "0"); // Reset attempts
                                             loading(false);
                                             isProcessing = false;
-                                            showToast("Tài khoản không tồn tại trong Firestore");
-                                            mAuth.signOut();
-                                        }
+                                            showToast("Đăng nhập thành công!");
+                                            logSessionEvent(userId, "sign_in_success");
+                                            Intent intent = new Intent(getApplicationContext(), MainActivity.class);
+                                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                                            startActivity(intent);
+                                            finish();
+                                        });
                                     });
                         });
                     } else {
                         loading(false);
                         isProcessing = false;
+                        incrementLoginAttempts();
                         try {
                             throw task.getException();
                         } catch (FirebaseAuthInvalidUserException e) {
                             showToast("Email không tồn tại");
+                            logSessionEvent(null, "invalid_email");
                         } catch (FirebaseAuthInvalidCredentialsException e) {
                             showToast("Sai mật khẩu");
+                            logSessionEvent(null, "invalid_password");
                         } catch (Exception e) {
                             showToast("Đăng nhập thất bại: " + e.getMessage());
+                            logSessionEvent(null, "sign_in_failed");
                         }
                     }
                 });
+    }
+
+    private void logSessionEvent(String userId, String action) {
+        HashMap<String, Object> log = new HashMap<>();
+        log.put("userId", userId != null ? userId : "unknown");
+        log.put("action", action);
+        log.put("timestamp", com.google.firebase.firestore.FieldValue.serverTimestamp());
+        db.collection("logs").add(log)
+                .addOnFailureListener(e -> Log.e("SignInActivity", "Failed to log session event: " + e.getMessage()));
     }
 
     private void loading(boolean isLoading) {
@@ -167,16 +249,29 @@ public class SignInActivity extends AppCompatActivity {
     }
 
     private boolean isValidSignInDetails() {
-        if (binding.inputEmail.getText().toString().trim().isEmpty()) {
+        String email = binding.inputEmail.getText().toString().trim();
+        if (email.isEmpty()) {
             showToast("Vui lòng nhập Email");
-            return false;
-        } else if (!Patterns.EMAIL_ADDRESS.matcher(binding.inputEmail.getText().toString()).matches()) {
-            showToast("Email không hợp lệ");
-            return false;
-        } else if (binding.inputPassword.getText().toString().trim().isEmpty()) {
-            showToast("Vui lòng nhập mật khẩu");
+            binding.inputEmail.setError("Email is required");
             return false;
         }
+        if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            showToast("Email không hợp lệ");
+            binding.inputEmail.setError("Invalid email format");
+            return false;
+        }
+        String password = binding.inputPassword.getText().toString().trim();
+        if (password.isEmpty()) {
+            showToast("Vui lòng nhập mật khẩu");
+            binding.inputPassword.setError("Password is required");
+            return false;
+        }
+        if (password.length() < 8 || !password.matches(".*[a-zA-Z].*") || !password.matches(".*\\d.*")) {
+            showToast("Mật khẩu phải có ít nhất 8 ký tự, bao gồm chữ và số");
+            binding.inputPassword.setError("Invalid password format");
+            return false;
+        }
+        Log.d("SignInActivity", "Input validation passed: email=" + email);
         return true;
     }
 }

@@ -29,4 +29,16 @@ public class Constant {
     public static final String KEY_RECEIVER_IMG = "receiverImg";
     public static final String KEY_LAST_MESSAGE = "lastMessage";
     public static final String KEY_AVAILABILITY = "availability";
+
+    //Rate limiting
+    public static final String KEY_MESSAGE_COUNT = "message_count";
+    public static final String KEY_MESSAGE_TIMESTAMP = "message_timestamp";
+    public static final int MAX_MESSAGES_PER_MINUTE = 10;
+    public static final long RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+
+    //Session management
+    public static final String KEY_LOGIN_ATTEMPTS = "login_attempts";
+    public static final String KEY_ATTEMPT_TIMESTAMP = "attempt_timestamp";
+    public static final int MAX_LOGIN_ATTEMPTS = 5;
+    public static final long ATTEMPT_WINDOW = 5 * 60 * 1000; // 5 minutes
 }

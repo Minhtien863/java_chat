@@ -14,6 +14,7 @@ import android.widget.Toast;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+
 import android.Manifest;
 
 import com.androids.javachat.adapter.RecentConversationsAdapter;
@@ -24,6 +25,7 @@ import com.androids.javachat.models.User;
 import com.androids.javachat.utilities.Constant;
 import com.androids.javachat.utilities.PreferenceManager;
 import com.androids.javachat.utilities.SpaceItemDecoration;
+import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.EventListener;
@@ -36,6 +38,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
+import javax.crypto.spec.IvParameterSpec;
+import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends BaseActivity implements ConversionListener {
 
@@ -45,28 +51,112 @@ public class MainActivity extends BaseActivity implements ConversionListener {
     private List<ChatMessage> conversations;
     private RecentConversationsAdapter conversationsAdapter;
     private FirebaseFirestore db;
+    private FirebaseAuth auth;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        auth = FirebaseAuth.getInstance();
+        preferenceManager = new PreferenceManager(getApplicationContext());
+        if (auth.getCurrentUser() == null || preferenceManager.getString(Constant.KEY_USER_ID) == null) {
+            Log.w("MainActivity", "Invalid session: user not logged in");
+            signOut();
+            return;
+        }
+        checkAuthToken();
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
-        preferenceManager = new PreferenceManager(getApplicationContext());
         init();
         loadUserDetail();
         getToken();
+        fetchAesKey();
         setListeners();
         listenConversion();
+    }
+
+    private void checkAuthToken() {
+        auth.getCurrentUser().getIdToken(false).addOnSuccessListener(result -> {
+            Log.d("MainActivity", "Auth token valid until: " + result.getExpirationTimestamp());
+        }).addOnFailureListener(e -> {
+            Log.e("MainActivity", "Auth token invalid: " + e.getMessage());
+            showToast("Phiên đăng nhập hết hạn, vui lòng đăng nhập lại");
+            signOut();
+        });
     }
 
     private void init() {
         conversations = new ArrayList<>();
         conversationsAdapter = new RecentConversationsAdapter(conversations, this);
         binding.conversationsRecyclerView.setAdapter(conversationsAdapter);
-        // Thêm SpaceItemDecoration với khoảng cách 16dp
-        int spacingInPixels = (int) (16 * getResources().getDisplayMetrics().density); // 16dp
+        int spacingInPixels = (int) (16 * getResources().getDisplayMetrics().density);
         binding.conversationsRecyclerView.addItemDecoration(new SpaceItemDecoration(spacingInPixels));
         db = FirebaseFirestore.getInstance();
+    }
+
+    private void fetchAesKey() {
+        db.collection("config").document("sharedAesKey").get()
+                .addOnSuccessListener(documentSnapshot -> {
+                    if (documentSnapshot.exists()) {
+                        String aesKey = documentSnapshot.getString("key");
+                        if (aesKey != null) {
+                            preferenceManager.putString("AES_KEY", aesKey);
+                            Log.d("MainActivity", "AES key fetched and stored: " + aesKey);
+                        } else {
+                            Log.e("MainActivity", "AES key is null");
+                            showToast("Failed to load encryption key");
+                        }
+                    } else {
+                        Log.e("MainActivity", "AES key document does not exist");
+                        showToast("Encryption key not found");
+                    }
+                })
+                .addOnFailureListener(e -> {
+                    Log.e("MainActivity", "Failed to fetch AES key: " + e.getMessage());
+                    showToast("Failed to load encryption key");
+                });
+    }
+
+    private String decodeMessage(String message) {
+        if (message == null) return "";
+        return message
+                .replace("\\u003C", "<")
+                .replace("\\u003E", ">")
+                .replace("\\u0022", "\"")
+                .replace("\\u0027", "'");
+    }
+
+    private String decryptMessage(String encryptedMessage) {
+        if (encryptedMessage == null || encryptedMessage.isEmpty()) {
+            Log.w("MainActivity", "Encrypted message is null or empty");
+            return "";
+        }
+        try {
+            String aesKey = preferenceManager.getString("AES_KEY");
+            if (aesKey == null) {
+                Log.e("MainActivity", "AES key not found for decryption");
+                return encryptedMessage;
+            }
+            Log.d("MainActivity", "Attempting to decrypt message: " + encryptedMessage);
+            byte[] keyBytes = Base64.decode(aesKey, Base64.DEFAULT);
+            byte[] encryptedBytes = Base64.decode(encryptedMessage, Base64.DEFAULT);
+            if (encryptedBytes.length < 16) {
+                Log.e("MainActivity", "Invalid encrypted message: too short for IV");
+                return encryptedMessage;
+            }
+            byte[] iv = new byte[16];
+            byte[] ciphertext = new byte[encryptedBytes.length - 16];
+            System.arraycopy(encryptedBytes, 0, iv, 0, 16);
+            System.arraycopy(encryptedBytes, 16, ciphertext, 0, encryptedBytes.length - 16);
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(keyBytes, "AES"), new IvParameterSpec(iv));
+            byte[] decryptedBytes = cipher.doFinal(ciphertext);
+            String decryptedMessage = new String(decryptedBytes, StandardCharsets.UTF_8);
+            Log.d("MainActivity", "Decryption successful: " + decryptedMessage);
+            return decryptedMessage;
+        } catch (Exception e) {
+            Log.e("MainActivity", "Decryption failed: " + e.getMessage() + ", Input: " + encryptedMessage);
+            return encryptedMessage;
+        }
     }
 
     private void setListeners() {
@@ -98,6 +188,7 @@ public class MainActivity extends BaseActivity implements ConversionListener {
 
     private final EventListener<QuerySnapshot> eventListener = (value, error) -> {
         if (error != null) {
+            Log.e("MainActivity", "Firestore listener error: " + error.getMessage());
             return;
         }
         if (value != null) {
@@ -117,7 +208,9 @@ public class MainActivity extends BaseActivity implements ConversionListener {
                         chatMessage.conversionName = documentChange.getDocument().getString(Constant.KEY_SENDER_NAME);
                         chatMessage.conversionId = documentChange.getDocument().getString(Constant.KEY_SENDER_ID);
                     }
-                    chatMessage.message = documentChange.getDocument().getString(Constant.KEY_LAST_MESSAGE);
+                    String encryptedMessage = documentChange.getDocument().getString(Constant.KEY_LAST_MESSAGE);
+                    String decryptedMessage = decryptMessage(encryptedMessage);
+                    chatMessage.message = decodeMessage(decryptedMessage);
                     chatMessage.dateObject = documentChange.getDocument().getDate(Constant.KEY_TIMESTAMP);
                     conversations.add(chatMessage);
                 } else if (documentChange.getType() == DocumentChange.Type.MODIFIED) {
@@ -125,7 +218,9 @@ public class MainActivity extends BaseActivity implements ConversionListener {
                         String senderId = documentChange.getDocument().getString(Constant.KEY_SENDER_ID);
                         String receiverId = documentChange.getDocument().getString(Constant.KEY_RECEIVER_ID);
                         if (conversations.get(i).senderId.equals(senderId) && conversations.get(i).receiverId.equals(receiverId)) {
-                            conversations.get(i).message = documentChange.getDocument().getString(Constant.KEY_LAST_MESSAGE);
+                            String encryptedMessage = documentChange.getDocument().getString(Constant.KEY_LAST_MESSAGE);
+                            String decryptedMessage = decryptMessage(encryptedMessage);
+                            conversations.get(i).message = decodeMessage(decryptedMessage);
                             conversations.get(i).dateObject = documentChange.getDocument().getDate(Constant.KEY_TIMESTAMP);
                             break;
                         }
@@ -141,37 +236,87 @@ public class MainActivity extends BaseActivity implements ConversionListener {
     };
 
     private void getToken() {
-        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(this::updateToken);
+        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> {
+            String currentToken = preferenceManager.getFcmToken();
+            if (!token.equals(currentToken)) {
+                updateToken(token);
+            }
+            Log.d("MainActivity", "FCM token fetched: " + token);
+        }).addOnFailureListener(e -> {
+            Log.e("MainActivity", "Failed to fetch FCM token: " + e.getMessage());
+        });
     }
 
     private void updateToken(String token) {
-        preferenceManager.putString(Constant.KEY_FCM_TOKEN, token);
-        FirebaseFirestore db = FirebaseFirestore.getInstance();
+        preferenceManager.saveFcmToken(token, System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000); // 7 days
         String userId = preferenceManager.getString(Constant.KEY_USER_ID);
         if (userId != null) {
             DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_USERS)
                     .document(userId);
             documentReference.update(Constant.KEY_FCM_TOKEN, token)
-                    .addOnSuccessListener(unused -> showToast("Token updated successfully"))
-                    .addOnFailureListener(e -> showToast("Unable to update token: " + e.getMessage()));
+                    .addOnSuccessListener(unused -> {
+                        showToast("Token updated successfully");
+                    })
+                    .addOnFailureListener(e -> {
+                        showToast("Unable to update token: " + e.getMessage());
+                    });
         } else {
             showToast("User ID not found");
         }
     }
 
     private void signOut() {
-        showToast("Đăng xuất thành công");
-        FirebaseFirestore db = FirebaseFirestore.getInstance();
-        DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_USERS)
-                .document(preferenceManager.getString(Constant.KEY_USER_ID));
-        HashMap<String, Object> updates = new HashMap<>();
-        updates.put(Constant.KEY_FCM_TOKEN, FieldValue.delete());
-        documentReference.update(updates).addOnSuccessListener(unused -> {
-                    preferenceManager.clear();
-                    startActivity(new Intent(getApplicationContext(), SignInActivity.class));
-                    finish();
+        if (auth.getCurrentUser() == null) {
+            Log.w("MainActivity", "Already signed out, redirecting to SignInActivity");
+            redirectToSignIn();
+            return;
+        }
+
+        String userId = preferenceManager.getString(Constant.KEY_USER_ID);
+        Log.d("MainActivity", "User signing out: " + userId);
+
+        // Log sign out event
+        HashMap<String, Object> log = new HashMap<>();
+        log.put("userId", userId != null ? userId : "unknown");
+        log.put("action", "sign_out");
+        log.put("timestamp", FieldValue.serverTimestamp());
+        log.put("deviceInfo", Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
+        db.collection("logs").add(log)
+                .addOnSuccessListener(documentReference -> {
+                    Log.d("MainActivity", "Sign out logged successfully");
                 })
-                .addOnFailureListener(e -> showToast("Không thể đăng xuất"));
+                .addOnFailureListener(e -> {
+                    Log.e("MainActivity", "Failed to log sign out: " + e.getMessage());
+                });
+
+        // Proceed with sign out
+        auth.signOut();
+        if (userId != null) {
+            DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_USERS)
+                    .document(userId);
+            HashMap<String, Object> updates = new HashMap<>();
+            updates.put(Constant.KEY_FCM_TOKEN, FieldValue.delete());
+            updates.put(Constant.KEY_AVAILABILITY, 0);
+            documentReference.update(updates)
+                    .addOnSuccessListener(unused -> {
+                        Log.d("MainActivity", "User data updated successfully");
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e("MainActivity", "Failed to update user data: " + e.getMessage());
+                    });
+        }
+
+        // Clear preferences and redirect
+        preferenceManager.clear();
+        preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, false);
+        redirectToSignIn();
+    }
+
+    private void redirectToSignIn() {
+        Intent intent = new Intent(getApplicationContext(), SignInActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(intent);
+        finish();
     }
 
     @Override

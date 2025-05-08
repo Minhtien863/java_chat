@@ -18,6 +18,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.androids.javachat.R;
 import com.androids.javachat.databinding.ActivitySignUpBinding;
 import com.androids.javachat.utilities.Constant;
 import com.androids.javachat.utilities.PreferenceManager;
@@ -41,7 +42,7 @@ public class SignUpActivity extends AppCompatActivity {
     private FirebaseFirestore db;
     private Handler verificationHandler;
     private Runnable verificationRunnable;
-    private static final long VERIFICATION_TIMEOUT = 5 * 60 * 1000; // 5 phút
+    private static final long VERIFICATION_TIMEOUT = 5 * 60 * 1000; // 5 minutes
     private boolean isVerifying = false;
 
     @Override
@@ -84,6 +85,7 @@ public class SignUpActivity extends AppCompatActivity {
                         if (mAuth.getCurrentUser() == null) {
                             stopVerification();
                             showToast("Lỗi xác thực, vui lòng thử lại");
+                            logSessionEvent(null, "auth_error");
                             return;
                         }
                         String userId = mAuth.getCurrentUser().getUid();
@@ -94,26 +96,25 @@ public class SignUpActivity extends AppCompatActivity {
                                     if (!verifyTask.isSuccessful()) {
                                         stopVerification();
                                         showToast("Không thể gửi email xác minh: " + verifyTask.getException().getMessage());
+                                        logSessionEvent(userId, "email_verification_failed");
                                         mAuth.signOut();
                                         return;
                                     }
 
-                                    // Lưu tạm thời vào PreferenceManager
                                     preferenceManager.putString(Constant.KEY_USER_ID, userId);
                                     preferenceManager.putString(Constant.KEY_NAME, name);
                                     preferenceManager.putString(Constant.KEY_EMAIL, email);
                                     preferenceManager.putString(Constant.KEY_IMAGE, encodedImage);
 
-                                    // Hiển thị thông báo chờ xác minh
                                     showToast("Vui lòng xác minh email qua Gmail");
                                     binding.txtSignUp.setText("Hủy");
                                     binding.txtSignUp.setOnClickListener(v -> {
                                         stopVerification();
                                         mAuth.signOut();
                                         showToast("Đã hủy xác minh");
+                                        logSessionEvent(userId, "verification_cancelled");
                                     });
 
-                                    // Bắt đầu kiểm tra xác minh định kỳ
                                     startVerificationCheck(userId, name, email);
                                 });
                     } else {
@@ -122,10 +123,13 @@ public class SignUpActivity extends AppCompatActivity {
                             throw task.getException();
                         } catch (FirebaseAuthUserCollisionException e) {
                             showToast("Email đã được sử dụng");
+                            logSessionEvent(null, "email_collision");
                         } catch (FirebaseAuthWeakPasswordException e) {
                             showToast("Mật khẩu quá yếu, vui lòng chọn mật khẩu mạnh hơn");
+                            logSessionEvent(null, "weak_password");
                         } catch (Exception e) {
                             showToast("Đăng ký thất bại: " + e.getMessage());
+                            logSessionEvent(null, "sign_up_failed");
                         }
                     }
                 });
@@ -139,25 +143,56 @@ public class SignUpActivity extends AppCompatActivity {
                 if (mAuth.getCurrentUser() == null) {
                     stopVerification();
                     showToast("Phiên xác thực đã hết hạn, vui lòng thử lại");
+                    logSessionEvent(userId, "auth_expired");
                     return;
                 }
 
                 mAuth.getCurrentUser().reload().addOnCompleteListener(task -> {
                     if (task.isSuccessful() && mAuth.getCurrentUser().isEmailVerified()) {
                         Log.d("SignUpActivity", "Email verified for user: " + userId);
-                        saveUserData(userId, name, email);
+                        checkSessionAndSaveUserData(userId, name, email);
                     } else if (System.currentTimeMillis() - startTime > VERIFICATION_TIMEOUT) {
                         stopVerification();
                         showToast("Hết thời gian xác minh, vui lòng thử lại");
+                        logSessionEvent(userId, "verification_timeout");
                         mAuth.signOut();
                     } else {
-                        // Tiếp tục kiểm tra sau 2 giây
                         verificationHandler.postDelayed(this, 2000);
                     }
                 });
             }
         };
         verificationHandler.post(verificationRunnable);
+    }
+
+    private void checkSessionAndSaveUserData(String userId, String name, String email) {
+        db.collection(Constant.KEY_COLLECTION_USERS)
+                .document(userId)
+                .get()
+                .addOnSuccessListener(documentSnapshot -> {
+                    String currentToken = preferenceManager.getFcmToken();
+                    if (documentSnapshot.exists()) {
+                        String storedToken = documentSnapshot.getString(Constant.KEY_FCM_TOKEN);
+                        if (storedToken != null && !storedToken.equals(currentToken)) {
+                            showToast("Tài khoản đang được đăng nhập trên thiết bị khác");
+                            logSessionEvent(userId, "session_conflict");
+                            mAuth.signOut();
+                            preferenceManager.clear();
+                            preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, false);
+                            stopVerification();
+                            return;
+                        }
+                    }
+                    saveUserData(userId, name, email);
+                })
+                .addOnFailureListener(e -> {
+                    showToast("Lỗi kiểm tra phiên: " + e.getMessage());
+                    logSessionEvent(userId, "session_check_failed");
+                    mAuth.signOut();
+                    preferenceManager.clear();
+                    preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, false);
+                    stopVerification();
+                });
     }
 
     private void saveUserData(String userId, String name, String email) {
@@ -187,10 +222,11 @@ public class SignUpActivity extends AppCompatActivity {
                         preferenceManager.putString(Constant.KEY_EMAIL, email);
                         preferenceManager.putString(Constant.KEY_IMAGE, encodedImage);
                         if (fcmToken != null) {
-                            preferenceManager.putString(Constant.KEY_FCM_TOKEN, fcmToken);
+                            preferenceManager.saveFcmToken(fcmToken, System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000); // 7 days
                         }
                         stopVerification();
                         showToast("Đăng ký thành công!");
+                        logSessionEvent(userId, "sign_up_success");
                         Intent intent = new Intent(getApplicationContext(), MainActivity.class);
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                         startActivity(intent);
@@ -200,9 +236,19 @@ public class SignUpActivity extends AppCompatActivity {
                         Log.e("SignUpActivity", "Failed to save user data: " + exception.getMessage());
                         stopVerification();
                         showToast("Lưu thông tin thất bại: " + exception.getMessage());
+                        logSessionEvent(userId, "save_user_failed");
                         mAuth.signOut();
                     });
         });
+    }
+
+    private void logSessionEvent(String userId, String action) {
+        HashMap<String, Object> log = new HashMap<>();
+        log.put("userId", userId != null ? userId : "unknown");
+        log.put("action", action);
+        log.put("timestamp", com.google.firebase.firestore.FieldValue.serverTimestamp());
+        db.collection("logs").add(log)
+                .addOnFailureListener(e -> Log.e("SignUpActivity", "Failed to log session event: " + e.getMessage()));
     }
 
     private void stopVerification() {
@@ -252,29 +298,54 @@ public class SignUpActivity extends AppCompatActivity {
     private boolean isValidSignUpDetails() {
         if (encodedImage == null) {
             showToast("Vui lòng chọn ảnh đại diện");
-            return false;
-        } else if (binding.inputName.getText().toString().trim().isEmpty()) {
-            showToast("Vui lòng nhập tên của bạn");
-            return false;
-        } else if (binding.inputEmail.getText().toString().trim().isEmpty()) {
-            showToast("Vui lòng nhập Email");
-            return false;
-        } else if (!Patterns.EMAIL_ADDRESS.matcher(binding.inputEmail.getText().toString()).matches()) {
-            showToast("Email không hợp lệ");
-            return false;
-        } else if (binding.inputPassword.getText().toString().trim().isEmpty()) {
-            showToast("Vui lòng nhập mật khẩu");
-            return false;
-        } else if (binding.inputPassword.getText().toString().trim().length() < 6) {
-            showToast("Mật khẩu phải có ít nhất 6 ký tự");
-            return false;
-        } else if (binding.inputConfirmPassword.getText().toString().trim().isEmpty()) {
-            showToast("Vui lòng xác nhận mật khẩu");
-            return false;
-        } else if (!binding.inputPassword.getText().toString().equals(binding.inputConfirmPassword.getText().toString())) {
-            showToast("Mật khẩu và xác nhận mật khẩu không khớp");
+            binding.imageProfile.setBackgroundResource(R.drawable.image_error_background);
             return false;
         }
+        String name = binding.inputName.getText().toString().trim();
+        if (name.isEmpty()) {
+            showToast("Vui lòng nhập tên của bạn");
+            binding.inputName.setError("Name is required");
+            return false;
+        }
+        if (name.matches(".*[<>\"'].*")) {
+            showToast("Tên không được chứa ký tự <>\"'");
+            binding.inputName.setError("Invalid characters in name");
+            return false;
+        }
+        String email = binding.inputEmail.getText().toString().trim();
+        if (email.isEmpty()) {
+            showToast("Vui lòng nhập Email");
+            binding.inputEmail.setError("Email is required");
+            return false;
+        }
+        if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            showToast("Email không hợp lệ");
+            binding.inputEmail.setError("Invalid email format");
+            return false;
+        }
+        String password = binding.inputPassword.getText().toString().trim();
+        if (password.isEmpty()) {
+            showToast("Vui lòng nhập mật khẩu");
+            binding.inputPassword.setError("Password is required");
+            return false;
+        }
+        if (password.length() < 8 || !password.matches(".*[a-zA-Z].*") || !password.matches(".*\\d.*")) {
+            showToast("Mật khẩu phải có ít nhất 8 ký tự, bao gồm chữ và số");
+            binding.inputPassword.setError("Password must be 8+ characters with letters and numbers");
+            return false;
+        }
+        String confirmPassword = binding.inputConfirmPassword.getText().toString().trim();
+        if (confirmPassword.isEmpty()) {
+            showToast("Vui lòng xác nhận mật khẩu");
+            binding.inputConfirmPassword.setError("Confirm password is required");
+            return false;
+        }
+        if (!password.equals(confirmPassword)) {
+            showToast("Mật khẩu và xác nhận mật khẩu không khớp");
+            binding.inputConfirmPassword.setError("Passwords do not match");
+            return false;
+        }
+        Log.d("SignUpActivity", "Input validation passed: email=" + email + ", name=" + name);
         return true;
     }
 

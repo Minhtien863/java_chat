@@ -62,6 +62,8 @@ dependencies {
     implementation("com.google.firebase:firebase-auth")
     // Sửa Google Auth để dùng BOM
     implementation("com.google.auth:google-auth-library-oauth2-http:1.33.1")
+
+    //Api
     implementation (libs.retrofit)
     implementation (libs.converter.gson)
     implementation (libs.gson)
@@ -69,6 +71,7 @@ dependencies {
     implementation("io.grpc:grpc-okhttp:1.68.0")
     implementation("io.grpc:grpc-protobuf-lite:1.68.0")
     implementation("io.grpc:grpc-stub:1.68.0")
+    implementation ("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
     // Scalable size unit
     implementation(libs.sdp.android)

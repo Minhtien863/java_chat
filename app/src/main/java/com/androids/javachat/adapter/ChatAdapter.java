@@ -19,11 +19,10 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private Bitmap receiverProfileImage;
     private final String senderId;
 
-
     public static final int VIEW_TYPE_SENT = 1;
     public static final int VIEW_TYPE_RECEIVED = 2;
 
-    public ChatAdapter( List<ChatMessage> chatMessageList,Bitmap receiverProfileImage, String senderId) {
+    public ChatAdapter(List<ChatMessage> chatMessageList, Bitmap receiverProfileImage, String senderId) {
         this.chatMessageList = chatMessageList;
         this.receiverProfileImage = receiverProfileImage;
         this.senderId = senderId;
@@ -36,7 +35,7 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     @NonNull
     @Override
     public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        if (viewType == VIEW_TYPE_SENT){
+        if (viewType == VIEW_TYPE_SENT) {
             return new SentMessageViewHolder(
                     ItemContainerSentMessageBinding.inflate(
                             LayoutInflater.from(parent.getContext()),
@@ -44,7 +43,7 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             false
                     )
             );
-        }else {
+        } else {
             return new ReceivedMessageViewHolder(
                     ItemContainerReceivedMessageBinding.inflate(
                             LayoutInflater.from(parent.getContext()),
@@ -57,9 +56,9 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     @Override
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
-        if (getItemViewType(position) == VIEW_TYPE_SENT){
+        if (getItemViewType(position) == VIEW_TYPE_SENT) {
             ((SentMessageViewHolder) holder).setData(chatMessageList.get(position));
-        }else {
+        } else {
             ((ReceivedMessageViewHolder) holder).setData(chatMessageList.get(position), receiverProfileImage);
         }
     }
@@ -71,45 +70,52 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     @Override
     public int getItemViewType(int position) {
-        if (chatMessageList.get(position).senderId.equals(senderId)){
+        if (chatMessageList.get(position).senderId.equals(senderId)) {
             return VIEW_TYPE_SENT;
-        }else {
+        } else {
             return VIEW_TYPE_RECEIVED;
         }
     }
 
-    static class SentMessageViewHolder extends RecyclerView.ViewHolder{
+    private static String decodeMessage(String message) {
+        if (message == null) return "";
+        return message
+                .replace("\\u003C", "<") // \u003C → <
+                .replace("\\u003E", ">") // \u003E → >
+                .replace("\\u0022", "\"") // \u0022 → "
+                .replace("\\u0027", "'"); // \u0027 → '
+    }
+
+    static class SentMessageViewHolder extends RecyclerView.ViewHolder {
 
         private final ItemContainerSentMessageBinding binding;
 
-        SentMessageViewHolder(ItemContainerSentMessageBinding itemCotainerSentMessageBinding){
+        SentMessageViewHolder(ItemContainerSentMessageBinding itemCotainerSentMessageBinding) {
             super(itemCotainerSentMessageBinding.getRoot());
             binding = itemCotainerSentMessageBinding;
         }
 
-        void setData(ChatMessage chatMessage){
-            binding.txtMessage.setText(chatMessage.message);
+        void setData(ChatMessage chatMessage) {
+            binding.txtMessage.setText(decodeMessage(chatMessage.message));
             binding.txtDateTime.setText(chatMessage.dateTime);
         }
     }
 
-    static class ReceivedMessageViewHolder extends RecyclerView.ViewHolder{
+    static class ReceivedMessageViewHolder extends RecyclerView.ViewHolder {
 
         private final ItemContainerReceivedMessageBinding binding;
 
-        ReceivedMessageViewHolder(ItemContainerReceivedMessageBinding itemContainerReceivedMessageBinding){
+        ReceivedMessageViewHolder(ItemContainerReceivedMessageBinding itemContainerReceivedMessageBinding) {
             super(itemContainerReceivedMessageBinding.getRoot());
             binding = itemContainerReceivedMessageBinding;
         }
 
-        void setData(ChatMessage chatMessage, Bitmap receiverProfileImage){
-            binding.txtMessage.setText(chatMessage.message);
+        void setData(ChatMessage chatMessage, Bitmap receiverProfileImage) {
+            binding.txtMessage.setText(decodeMessage(chatMessage.message));
             binding.txtDateTime.setText(chatMessage.dateTime);
-            if (receiverProfileImage != null){
+            if (receiverProfileImage != null) {
                 binding.imgProfile.setImageBitmap(receiverProfileImage);
             }
-
         }
     }
-
 }

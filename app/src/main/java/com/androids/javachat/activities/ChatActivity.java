@@ -1,11 +1,13 @@
 package com.androids.javachat.activities;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Bundle;
 import android.util.Base64;
 import android.view.View;
 import android.util.Log;
+import android.widget.Toast;
 
 import com.androids.javachat.adapter.ChatAdapter;
 import com.androids.javachat.databinding.ActivityChatBinding;
@@ -26,6 +28,8 @@ import com.androids.javachat.Networks.ApiClient;
 import com.androids.javachat.Networks.ApiService;
 import com.google.gson.Gson;
 
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -34,6 +38,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 import retrofit2.Call;
 import retrofit2.Callback;
@@ -50,6 +58,7 @@ public class ChatActivity extends BaseActivity {
     private String conversionId = null;
     private Boolean isReceiverOnline = false;
 
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -57,7 +66,7 @@ public class ChatActivity extends BaseActivity {
         setContentView(binding.getRoot());
         preferenceManager = new PreferenceManager(getApplicationContext());
         setListener();
-        loadReciverDetails();
+        loadReceiverDetails();
         init();
         listenMessage();
     }
@@ -69,30 +78,150 @@ public class ChatActivity extends BaseActivity {
     }
 
     private void listenMessage() {
-        db.collection(Constant.KEY_COLLECTION_CHAT).whereEqualTo(Constant.KEY_SENDER_ID, preferenceManager.getString(Constant.KEY_USER_ID)).whereEqualTo(Constant.KEY_RECEIVER_ID, receiverUser.id).addSnapshotListener(eventListener);
-        db.collection(Constant.KEY_COLLECTION_CHAT).whereEqualTo(Constant.KEY_SENDER_ID, receiverUser.id).whereEqualTo(Constant.KEY_RECEIVER_ID, preferenceManager.getString(Constant.KEY_USER_ID)).addSnapshotListener(eventListener);
+        db.collection(Constant.KEY_COLLECTION_CHAT)
+                .whereEqualTo(Constant.KEY_SENDER_ID, preferenceManager.getString(Constant.KEY_USER_ID))
+                .whereEqualTo(Constant.KEY_RECEIVER_ID, receiverUser.id)
+                .addSnapshotListener(eventListener);
+        db.collection(Constant.KEY_COLLECTION_CHAT)
+                .whereEqualTo(Constant.KEY_SENDER_ID, receiverUser.id)
+                .whereEqualTo(Constant.KEY_RECEIVER_ID, preferenceManager.getString(Constant.KEY_USER_ID))
+                .addSnapshotListener(eventListener);
+    }
+
+    private boolean checkMessageRateLimit() {
+        int messageCount = preferenceManager.getString(Constant.KEY_MESSAGE_COUNT) != null ?
+                Integer.parseInt(preferenceManager.getString(Constant.KEY_MESSAGE_COUNT)) : 0;
+        long lastMessageTime = preferenceManager.getString(Constant.KEY_MESSAGE_TIMESTAMP) != null ?
+                Long.parseLong(preferenceManager.getString(Constant.KEY_MESSAGE_TIMESTAMP)) : 0;
+        long currentTime = System.currentTimeMillis();
+
+        if (currentTime - lastMessageTime > Constant.RATE_LIMIT_WINDOW) {
+            preferenceManager.putString(Constant.KEY_MESSAGE_COUNT, "0");
+            preferenceManager.putString(Constant.KEY_MESSAGE_TIMESTAMP, String.valueOf(currentTime));
+            return true;
+        }
+
+        if (messageCount >= Constant.MAX_MESSAGES_PER_MINUTE) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void incrementMessageCount() {
+        int messageCount = preferenceManager.getString(Constant.KEY_MESSAGE_COUNT) != null ?
+                Integer.parseInt(preferenceManager.getString(Constant.KEY_MESSAGE_COUNT)) : 0;
+        preferenceManager.putString(Constant.KEY_MESSAGE_COUNT, String.valueOf(messageCount + 1));
+        preferenceManager.putString(Constant.KEY_MESSAGE_TIMESTAMP, String.valueOf(System.currentTimeMillis()));
+    }
+
+    private String sanitizeMessage(String message) {
+        if (message == null || message.trim().isEmpty()) {
+            Log.e("ChatActivity", "Empty message");
+            Toast.makeText(this, "Message cannot be empty", Toast.LENGTH_SHORT).show();
+            return null;
+        }
+        if (message.length() > 1000) {
+            Log.e("ChatActivity", "Message too long: " + message.length());
+            Toast.makeText(this, "Message cannot exceed 1000 characters", Toast.LENGTH_SHORT).show();
+            return null;
+        }
+        String sanitized = message
+                .replace("<", "\\u003C")
+                .replace(">", "\\u003E")
+                .replace("\"", "\\u0022")
+                .replace("'", "\\u0027");
+        Log.d("ChatActivity", "Message sanitized: " + sanitized);
+        return sanitized;
+    }
+
+    private String decodeMessage(String message) {
+        if (message == null) return "";
+        return message
+                .replace("\\u003C", "<")
+                .replace("\\u003E", ">")
+                .replace("\\u0022", "\"")
+                .replace("\\u0027", "'");
+    }
+
+    private String encryptMessage(String message) {
+        if (message == null || message.isEmpty()) return "";
+        try {
+            String aesKey = preferenceManager.getString("AES_KEY");
+            if (aesKey == null) {
+                Log.e("ChatActivity", "AES key not found for encryption");
+                return message;
+            }
+            byte[] keyBytes = Base64.decode(aesKey, Base64.DEFAULT);
+            byte[] iv = new byte[16];
+            new SecureRandom().nextBytes(iv);
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyBytes, "AES"), new IvParameterSpec(iv));
+            byte[] encryptedBytes = cipher.doFinal(message.getBytes(StandardCharsets.UTF_8));
+            byte[] combined = new byte[iv.length + encryptedBytes.length];
+            System.arraycopy(iv, 0, combined, 0, iv.length);
+            System.arraycopy(encryptedBytes, 0, combined, iv.length, encryptedBytes.length);
+            return Base64.encodeToString(combined, Base64.DEFAULT);
+        } catch (Exception e) {
+            Log.e("ChatActivity", "Encryption failed: " + e.getMessage());
+            return message;
+        }
+    }
+
+    private String decryptMessage(String encryptedMessage) {
+        if (encryptedMessage == null || encryptedMessage.isEmpty()) return "";
+        try {
+            String aesKey = preferenceManager.getString("AES_KEY");
+            if (aesKey == null) {
+                Log.e("ChatActivity", "AES key not found for decryption");
+                return encryptedMessage;
+            }
+            byte[] keyBytes = Base64.decode(aesKey, Base64.DEFAULT);
+            byte[] encryptedBytes = Base64.decode(encryptedMessage, Base64.DEFAULT);
+            byte[] iv = new byte[16];
+            byte[] ciphertext = new byte[encryptedBytes.length - 16];
+            System.arraycopy(encryptedBytes, 0, iv, 0, 16);
+            System.arraycopy(encryptedBytes, 16, ciphertext, 0, encryptedBytes.length - 16);
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(keyBytes, "AES"), new IvParameterSpec(iv));
+            byte[] decryptedBytes = cipher.doFinal(ciphertext);
+            return new String(decryptedBytes, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            Log.e("ChatActivity", "Decryption failed: " + e.getMessage());
+            return encryptedMessage;
+        }
     }
 
     private void sendMessage() {
-        HashMap<String, Object> message = new HashMap<>();
+        if (!checkMessageRateLimit()) {
+            Toast.makeText(this, "Bạn đã gửi quá nhiều tin nhắn, vui lòng thử lại sau 1 phút", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
         String messageText = binding.inputMessage.getText().toString();
+        String sanitizedMessage = sanitizeMessage(messageText);
+        if (sanitizedMessage == null) {
+            return;
+        }
+        String encryptedMessage = encryptMessage(sanitizedMessage);
+        HashMap<String, Object> message = new HashMap<>();
         message.put(Constant.KEY_SENDER_ID, preferenceManager.getString(Constant.KEY_USER_ID));
         message.put(Constant.KEY_RECEIVER_ID, receiverUser.id);
-        message.put(Constant.KEY_MESSAGE, messageText);
+        message.put(Constant.KEY_MESSAGE, encryptedMessage);
         message.put(Constant.KEY_TIMESTAMP, new Date());
         db.collection(Constant.KEY_COLLECTION_CHAT).add(message).addOnSuccessListener(documentReference -> {
-            // Kiểm tra và lấy token trước khi gửi thông báo
+            incrementMessageCount();
             if (receiverUser.token == null) {
-                fetchReceiverFcmTokenFromFirestoreAndSend(messageText);
+                fetchReceiverFcmTokenFromFirestoreAndSend(sanitizedMessage);
             } else {
-                sendNotificationToReceiver(messageText);
+                sendNotificationToReceiver(sanitizedMessage);
             }
         }).addOnFailureListener(e -> {
             Log.e("Firestore", "Failed to send message: " + e.getMessage());
         });
         binding.inputMessage.setText(null);
         if (conversionId != null) {
-            updateConversion(messageText);
+            updateConversion(encryptedMessage);
         } else {
             HashMap<String, Object> conversion = new HashMap<>();
             conversion.put(Constant.KEY_SENDER_ID, preferenceManager.getString(Constant.KEY_USER_ID));
@@ -101,19 +230,19 @@ public class ChatActivity extends BaseActivity {
             conversion.put(Constant.KEY_RECEIVER_ID, receiverUser.id);
             conversion.put(Constant.KEY_RECEIVER_NAME, receiverUser.name);
             conversion.put(Constant.KEY_RECEIVER_IMG, receiverUser.image);
-            conversion.put(Constant.KEY_LAST_MESSAGE, messageText);
+            conversion.put(Constant.KEY_LAST_MESSAGE, encryptedMessage);
             conversion.put(Constant.KEY_TIMESTAMP, new Date());
             addConversion(conversion);
         }
     }
 
-    private void fetchReceiverFcmTokenFromFirestoreAndSend(String messageText) {
+    private void fetchReceiverFcmTokenFromFirestoreAndSend(String sanitizedMessage) {
         db.collection(Constant.KEY_COLLECTION_USERS).document(receiverUser.id).get().addOnCompleteListener(task -> {
             if (task.isSuccessful() && task.getResult() != null) {
                 DocumentSnapshot document = task.getResult();
-                receiverUser.token = document.getString("fcmtoken");
+                receiverUser.token = document.getString(Constant.KEY_FCM_TOKEN);
                 if (receiverUser.token != null && !receiverUser.token.isEmpty()) {
-                    sendNotificationToReceiver(messageText);
+                    sendNotificationToReceiver(sanitizedMessage);
                 } else {
                     Log.e("FCM_TEST", "FCM token still not found for receiver after fetch");
                 }
@@ -123,14 +252,13 @@ public class ChatActivity extends BaseActivity {
         });
     }
 
-    private void sendNotificationToReceiver(String messageText) {
-        // Lấy access token từ PreferenceManager để gọi API
+    private void sendNotificationToReceiver(String sanitizedMessage) {
         String accessToken = preferenceManager.getFcmToken();
         if (accessToken == null) {
             preferenceManager.refreshFcmToken(new PreferenceManager.OnTokenRefreshListener() {
                 @Override
                 public void onTokenRefreshed(String newToken) {
-                    sendNotificationWithToken(newToken, messageText);
+                    sendNotificationWithToken(newToken, sanitizedMessage);
                 }
 
                 @Override
@@ -139,27 +267,24 @@ public class ChatActivity extends BaseActivity {
                 }
             });
         } else {
-            sendNotificationWithToken(accessToken, messageText);
+            sendNotificationWithToken(accessToken, sanitizedMessage);
         }
     }
 
-    private void sendNotificationWithToken(String accessToken, String messageText) {
+    private void sendNotificationWithToken(String accessToken, String sanitizedMessage) {
         if (receiverUser.token == null || receiverUser.token.isEmpty()) {
             Log.e("FCM_TEST", "FCM token not found for receiver");
             return;
         }
 
-        String notificationBody = preferenceManager.getString(Constant.KEY_NAME) + ": " + messageText;
-
         HashMap<String, String> data = new HashMap<>();
-        data.put("title", "Chat Notification");
-        data.put("body", notificationBody);
+        data.put("title", "JavaChat");
+        data.put("body", "Bạn có tin nhắn từ " + preferenceManager.getString(Constant.KEY_NAME));
         data.put("senderId", preferenceManager.getString(Constant.KEY_USER_ID));
         data.put("senderName", preferenceManager.getString(Constant.KEY_NAME));
 
         Log.d("FCM_TEST", "Receiver token: " + receiverUser.token);
 
-        // Tạo JSON thủ công
         HashMap<String, Object> message = new HashMap<>();
         message.put("token", receiverUser.token);
         message.put("data", data);
@@ -169,7 +294,6 @@ public class ChatActivity extends BaseActivity {
         String jsonRequest = new Gson().toJson(requestMap);
         Log.d("FCM_TEST", "Sending request: " + jsonRequest);
 
-        // Tạo MessageRequest từ JSON thủ công
         MessageRequest request = new MessageRequest(new MessageRequest.Message(receiverUser.token, data));
 
         ApiService apiService = ApiClient.getApiService(accessToken);
@@ -222,7 +346,9 @@ public class ChatActivity extends BaseActivity {
                     ChatMessage chatMessage = new ChatMessage();
                     chatMessage.senderId = documentChange.getDocument().getString(Constant.KEY_SENDER_ID);
                     chatMessage.receiverId = documentChange.getDocument().getString(Constant.KEY_RECEIVER_ID);
-                    chatMessage.message = documentChange.getDocument().getString(Constant.KEY_MESSAGE);
+                    String encryptedMessage = documentChange.getDocument().getString(Constant.KEY_MESSAGE);
+                    String decryptedMessage = decryptMessage(encryptedMessage);
+                    chatMessage.message = decodeMessage(decryptedMessage);
                     chatMessage.dateTime = getReadDateTime(documentChange.getDocument().getDate(Constant.KEY_TIMESTAMP));
                     chatMessage.dateObject = documentChange.getDocument().getDate(Constant.KEY_TIMESTAMP);
                     chatMessages.add(chatMessage);
@@ -252,16 +378,15 @@ public class ChatActivity extends BaseActivity {
         }
     }
 
-    private void loadReciverDetails() {
+    private void loadReceiverDetails() {
         receiverUser = (User) getIntent().getSerializableExtra(Constant.KEY_USER);
         if (receiverUser == null) {
             Log.e("ChatActivity", "Receiver user is null, finishing activity");
-            finish(); // Thoát nếu không có dữ liệu người nhận
+            finish();
             return;
         }
         binding.txtName.setText(receiverUser.name);
 
-        // Nếu token hoặc image không có, lấy từ Firestore
         if (receiverUser.token == null || receiverUser.image == null) {
             fetchReceiverDetailsFromFirestore();
         }
@@ -272,12 +397,11 @@ public class ChatActivity extends BaseActivity {
             if (task.isSuccessful() && task.getResult() != null) {
                 DocumentSnapshot document = task.getResult();
                 if (receiverUser.token == null) {
-                    receiverUser.token = document.getString("fcmtoken");
+                    receiverUser.token = document.getString(Constant.KEY_FCM_TOKEN);
                 }
                 if (receiverUser.image == null) {
                     receiverUser.image = document.getString(Constant.KEY_IMAGE);
                 }
-                // Cập nhật adapter
                 chatAdapter = new ChatAdapter(chatMessages, getBitmapFromEncodedString(receiverUser.image), preferenceManager.getString(Constant.KEY_USER_ID));
                 binding.chatView.setAdapter(chatAdapter);
             } else {
@@ -312,15 +436,17 @@ public class ChatActivity extends BaseActivity {
     }
 
     private void checkForConversionRemotely(String senderId, String receiverId) {
-        db.collection(Constant.KEY_COLLECTION_CONVERSATIONS).whereEqualTo(Constant.KEY_SENDER_ID, senderId).whereEqualTo(Constant.KEY_RECEIVER_ID, receiverId).get().addOnCompleteListener(conversionOnCompleteListener);
+        db.collection(Constant.KEY_COLLECTION_CONVERSATIONS)
+                .whereEqualTo(Constant.KEY_SENDER_ID, senderId)
+                .whereEqualTo(Constant.KEY_RECEIVER_ID, receiverId)
+                .get()
+                .addOnCompleteListener(task -> {
+                    if (task.isSuccessful() && task.getResult() != null && task.getResult().getDocuments().size() > 0) {
+                        DocumentSnapshot documentSnapshot = task.getResult().getDocuments().get(0);
+                        conversionId = documentSnapshot.getId();
+                    }
+                });
     }
-
-    private final OnCompleteListener<QuerySnapshot> conversionOnCompleteListener = task -> {
-        if (task.isSuccessful() && task.getResult() != null && task.getResult().getDocuments().size() > 0) {
-            DocumentSnapshot documentSnapshot = task.getResult().getDocuments().get(0);
-            conversionId = documentSnapshot.getId();
-        }
-    };
 
     @Override
     protected void onResume() {

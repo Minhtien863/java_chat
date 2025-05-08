@@ -1,6 +1,9 @@
 package com.androids.javachat.Networks;
 
+import java.util.concurrent.TimeUnit;
+
 import okhttp3.OkHttpClient;
+import okhttp3.logging.HttpLoggingInterceptor;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
 
@@ -9,7 +12,11 @@ public class ApiClient {
     private static final String BASE_URL = "https://fcm.googleapis.com/";
 
     public static ApiService getApiService(String accessToken) {
+        HttpLoggingInterceptor loggingInterceptor = new HttpLoggingInterceptor();
+        loggingInterceptor.setLevel(HttpLoggingInterceptor.Level.BODY);
+
         OkHttpClient client = new OkHttpClient.Builder()
+                .addInterceptor(loggingInterceptor)
                 .addInterceptor(chain -> {
                     okhttp3.Request original = chain.request();
                     okhttp3.Request request = original.newBuilder()
@@ -17,6 +24,9 @@ public class ApiClient {
                             .build();
                     return chain.proceed(request);
                 })
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
                 .build();
 
         if (retrofit == null) {
