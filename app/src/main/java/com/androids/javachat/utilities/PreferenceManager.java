@@ -14,13 +14,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class PreferenceManager {
     private SharedPreferences sharedPreferences;
     private SharedPreferences.Editor editor;
-    private static final String KEY_FCM_TOKEN = "fcm_token";
-    private static final String KEY_TOKEN_EXPIRATION = "token_expiration";
     private GoogleCredentials googleCredentials;
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     public PreferenceManager(Context context) {
         try {
@@ -38,7 +40,6 @@ public class PreferenceManager {
             Log.d("PreferenceManager", "Initialized EncryptedSharedPreferences");
         } catch (Exception e) {
             Log.e("PreferenceManager", "Failed to initialize EncryptedSharedPreferences: " + e.getMessage());
-            // Fallback to regular SharedPreferences
             sharedPreferences = context.getSharedPreferences(Constant.KEY_PREFERENCE_NAME, Context.MODE_PRIVATE);
             editor = sharedPreferences.edit();
             Log.d("PreferenceManager", "Fallback to regular SharedPreferences");
@@ -78,47 +79,35 @@ public class PreferenceManager {
         editor.clear().apply();
     }
 
-    public void saveFcmToken(String token, long expirationTime) {
-        editor.putString(KEY_FCM_TOKEN, token);
-        editor.putLong(KEY_TOKEN_EXPIRATION, expirationTime);
-        editor.apply();
-        Log.d("FCM_TOKEN", "Token saved: " + token + ", Expires at: " + new Date(expirationTime));
-    }
-
-    public String getFcmToken() {
-        String token = sharedPreferences.getString(KEY_FCM_TOKEN, null);
-        long expirationTime = sharedPreferences.getLong(KEY_TOKEN_EXPIRATION, 0);
-        if (token != null && System.currentTimeMillis() < expirationTime) {
-            Log.d("FCM_TOKEN", "Token retrieved: " + token + ", Still valid");
-            return token;
+    public String getAccessToken() throws IOException {
+        if (googleCredentials == null) {
+            throw new IOException("GoogleCredentials not initialized");
         }
-        Log.d("FCM_TOKEN", "Token expired or not found");
-        return null;
-    }
-
-    public void refreshFcmToken(OnTokenRefreshListener listener) {
-        if (googleCredentials != null) {
-            new Thread(() -> {
-                try {
-                    googleCredentials.refreshIfExpired();
-                    String newToken = googleCredentials.getAccessToken().getTokenValue();
-                    long expirationTime = googleCredentials.getAccessToken().getExpirationTime().getTime();
-                    saveFcmToken(newToken, expirationTime);
-                    Log.d("FCM_TOKEN", "Token refreshed: " + newToken);
-                    listener.onTokenRefreshed(newToken);
-                } catch (IOException e) {
-                    Log.e("FCM_TOKEN", "Failed to refresh token: " + e.getMessage());
-                    listener.onTokenRefreshFailed(e);
-                }
-            }).start();
-        } else {
-            Log.e("FCM_TOKEN", "Google Credentials not initialized");
-            listener.onTokenRefreshFailed(new IOException("Google Credentials not initialized"));
+        Future<String> future = executor.submit(() -> {
+            try {
+                googleCredentials.refreshIfExpired();
+                return googleCredentials.getAccessToken().getTokenValue();
+            } catch (IOException e) {
+                Log.e("PreferenceManager", "Failed to refresh access token: " + e.getMessage());
+                throw e;
+            }
+        });
+        try {
+            return future.get();
+        } catch (Exception e) {
+            Log.e("PreferenceManager", "Failed to get access token: " + e.getMessage());
+            throw new IOException("Failed to get access token", e);
         }
     }
 
-    public interface OnTokenRefreshListener {
-        void onTokenRefreshed(String token);
-        void onTokenRefreshFailed(Exception e);
+    public void saveDeviceFcmToken(String token) {
+        editor.putString(Constant.DEVICE_FCM_TOKEN, token).apply();
+        Log.d("FCM_TOKEN", "Device FCM token saved: " + token);
+    }
+
+    public String getDeviceFcmToken() {
+        String token = sharedPreferences.getString(Constant.DEVICE_FCM_TOKEN, null);
+        Log.d("FCM_TOKEN", "Device FCM token retrieved: " + (token != null ? token : "null"));
+        return token;
     }
 }

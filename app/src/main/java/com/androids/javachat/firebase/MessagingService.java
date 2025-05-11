@@ -17,20 +17,33 @@ import com.androids.javachat.activities.ChatActivity;
 import com.androids.javachat.models.User;
 import com.androids.javachat.utilities.Constant;
 
+import com.androids.javachat.utilities.PreferenceManager;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
 public class MessagingService extends FirebaseMessagingService {
 
+    private PreferenceManager preferenceManager;
+    private FirebaseFirestore db;
     private static final String CHANNEL_ID = "chat_notifications";
     private static final String CHANNEL_NAME = "Chat Notifications";
 
     @Override
     public void onNewToken(@NonNull String token) {
         super.onNewToken(token);
-        Log.d("FCM", "Token: " + token);
+        Log.d("FCM_TOKEN", "New FCM token: " + token);
+        preferenceManager.saveDeviceFcmToken(token);
+        String userId = preferenceManager.getString(Constant.KEY_USER_ID);
+        if (userId != null) {
+            db.collection(Constant.KEY_COLLECTION_USERS)
+                    .document(userId)
+                    .update(Constant.KEY_FCM_TOKEN, token)
+                    .addOnSuccessListener(aVoid -> Log.d("FCM_TOKEN", "Updated FCM token in Firestore"))
+                    .addOnFailureListener(e -> Log.e("FCM_TOKEN", "Failed to update FCM token: " + e.getMessage()));
+        }
     }
+
 
     @Override
     public void onMessageReceived(@NonNull RemoteMessage remoteMessage) {
@@ -55,12 +68,10 @@ public class MessagingService extends FirebaseMessagingService {
 
         Log.d("FCM", "Message: " + body + ", SenderId: " + senderId);
 
-        // Tạo User object (không có senderImage)
         User sender = new User();
         sender.id = senderId;
         sender.name = senderName;
 
-        // Không cần lấy senderImage từ data payload, sẽ lấy từ Firestore trong ChatActivity
         showNotification(title, body, sender);
     }
 

@@ -26,6 +26,7 @@ import com.androids.javachat.utilities.Constant;
 import com.androids.javachat.utilities.PreferenceManager;
 import com.androids.javachat.utilities.SpaceItemDecoration;
 import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.EventListener;
@@ -58,25 +59,70 @@ public class MainActivity extends BaseActivity implements ConversionListener {
         super.onCreate(savedInstanceState);
         auth = FirebaseAuth.getInstance();
         preferenceManager = new PreferenceManager(getApplicationContext());
-        if (auth.getCurrentUser() == null || preferenceManager.getString(Constant.KEY_USER_ID) == null) {
-            Log.w("MainActivity", "Invalid session: user not logged in");
+        FirebaseUser currentUser = auth.getCurrentUser();
+        String userId = preferenceManager.getString(Constant.KEY_USER_ID);
+        Log.d("MainActivity", "Current user: " + (currentUser != null ? currentUser.getUid() : "null") + ", Stored userId: " + userId);
+        if (currentUser == null || userId == null || !userId.equals(currentUser.getUid())) {
+            Log.w("MainActivity", "Invalid session: user not logged in or userId mismatch");
             signOut();
             return;
         }
-        checkAuthToken();
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
         init();
         loadUserDetail();
         getToken();
-        fetchAesKey();
         setListeners();
-        listenConversion();
+        checkAuthToken();
+        listenSessionChanges(); // Thêm listener cho session token
+    }
+
+    private void listenSessionChanges() {
+        String userId = preferenceManager.getString(Constant.KEY_USER_ID);
+        db.collection(Constant.KEY_COLLECTION_USERS)
+                .document(userId)
+                .addSnapshotListener((value, error) -> {
+                    if (error != null) {
+                        Log.e("MainActivity", "Session listener error: " + error.getMessage());
+                        return;
+                    }
+                    if (value != null) {
+                        String firestoreSessionToken = value.getString(Constant.KEY_SESSION_TOKEN);
+                        String storedSessionToken = preferenceManager.getString(Constant.KEY_SESSION_TOKEN);
+                        if (firestoreSessionToken != null && storedSessionToken != null && !firestoreSessionToken.equals(storedSessionToken)) {
+                            Log.w("MainActivity", "Session token mismatch, signing out");
+                            showToast("Tài khoản đã đăng nhập trên thiết bị khác");
+                            signOut();
+                        }
+                    }
+                });
     }
 
     private void checkAuthToken() {
         auth.getCurrentUser().getIdToken(false).addOnSuccessListener(result -> {
             Log.d("MainActivity", "Auth token valid until: " + result.getExpirationTimestamp());
+            // Kiểm tra session token ban đầu
+            String userId = preferenceManager.getString(Constant.KEY_USER_ID);
+            db.collection(Constant.KEY_COLLECTION_USERS)
+                    .document(userId)
+                    .get()
+                    .addOnSuccessListener(documentSnapshot -> {
+                        String firestoreSessionToken = documentSnapshot.getString(Constant.KEY_SESSION_TOKEN);
+                        String storedSessionToken = preferenceManager.getString(Constant.KEY_SESSION_TOKEN);
+                        if (firestoreSessionToken != null && storedSessionToken != null && !firestoreSessionToken.equals(storedSessionToken)) {
+                            Log.w("MainActivity", "Initial session token mismatch, signing out");
+                            showToast("Tài khoản đã đăng nhập trên thiết bị khác");
+                            signOut();
+                        } else {
+                            fetchAesKey();
+                            listenConversion();
+                        }
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e("MainActivity", "Failed to check session token: " + e.getMessage());
+                        showToast("Lỗi kiểm tra phiên, vui lòng đăng nhập lại");
+                        signOut();
+                    });
         }).addOnFailureListener(e -> {
             Log.e("MainActivity", "Auth token invalid: " + e.getMessage());
             showToast("Phiên đăng nhập hết hạn, vui lòng đăng nhập lại");
@@ -101,19 +147,33 @@ public class MainActivity extends BaseActivity implements ConversionListener {
                         if (aesKey != null) {
                             preferenceManager.putString("AES_KEY", aesKey);
                             Log.d("MainActivity", "AES key fetched and stored: " + aesKey);
+                            // Kiểm tra lại conversations nếu cần
+                            if (!conversations.isEmpty()) {
+                                refreshConversations();
+                            }
                         } else {
-                            Log.e("MainActivity", "AES key is null");
-                            showToast("Failed to load encryption key");
+                            Log.e("MainActivity", "AES key is null in document");
+                            showToast("Khóa mã hóa không hợp lệ");
                         }
                     } else {
                         Log.e("MainActivity", "AES key document does not exist");
-                        showToast("Encryption key not found");
+                        showToast("Không tìm thấy khóa mã hóa");
                     }
                 })
                 .addOnFailureListener(e -> {
                     Log.e("MainActivity", "Failed to fetch AES key: " + e.getMessage());
-                    showToast("Failed to load encryption key");
+                    showToast("Lỗi tải khóa mã hóa: " + e.getMessage());
                 });
+    }
+
+    private void refreshConversations() {
+        // Cập nhật lại danh sách conversations sau khi lấy được AES key
+        for (int i = 0; i < conversations.size(); i++) {
+            String encryptedMessage = conversations.get(i).message;
+            String decryptedMessage = decryptMessage(encryptedMessage);
+            conversations.get(i).message = decodeMessage(decryptedMessage);
+        }
+        conversationsAdapter.notifyDataSetChanged();
     }
 
     private String decodeMessage(String message) {
@@ -130,12 +190,12 @@ public class MainActivity extends BaseActivity implements ConversionListener {
             Log.w("MainActivity", "Encrypted message is null or empty");
             return "";
         }
+        String aesKey = preferenceManager.getString("AES_KEY");
+        if (aesKey == null) {
+            Log.e("MainActivity", "AES key not found for decryption");
+            return encryptedMessage; // Trả về chuỗi mã hóa gốc
+        }
         try {
-            String aesKey = preferenceManager.getString("AES_KEY");
-            if (aesKey == null) {
-                Log.e("MainActivity", "AES key not found for decryption");
-                return encryptedMessage;
-            }
             Log.d("MainActivity", "Attempting to decrypt message: " + encryptedMessage);
             byte[] keyBytes = Base64.decode(aesKey, Base64.DEFAULT);
             byte[] encryptedBytes = Base64.decode(encryptedMessage, Base64.DEFAULT);
@@ -177,18 +237,24 @@ public class MainActivity extends BaseActivity implements ConversionListener {
     }
 
     private void listenConversion() {
-        Log.d("MainActivity", "Listening to conversations for user: " + preferenceManager.getString(Constant.KEY_USER_ID));
+        String userId = preferenceManager.getString(Constant.KEY_USER_ID);
+        Log.d("MainActivity", "Listening to conversations for user: " + userId);
         db.collection(Constant.KEY_COLLECTION_CONVERSATIONS)
-                .whereEqualTo(Constant.KEY_SENDER_ID, preferenceManager.getString(Constant.KEY_USER_ID))
+                .whereEqualTo(Constant.KEY_SENDER_ID, userId)
                 .addSnapshotListener(eventListener);
         db.collection(Constant.KEY_COLLECTION_CONVERSATIONS)
-                .whereEqualTo(Constant.KEY_RECEIVER_ID, preferenceManager.getString(Constant.KEY_USER_ID))
+                .whereEqualTo(Constant.KEY_RECEIVER_ID, userId)
                 .addSnapshotListener(eventListener);
     }
 
     private final EventListener<QuerySnapshot> eventListener = (value, error) -> {
         if (error != null) {
             Log.e("MainActivity", "Firestore listener error: " + error.getMessage());
+            if (auth.getCurrentUser() == null) {
+                Log.d("MainActivity", "Ignoring error due to signed out state");
+                return; // Bỏ qua lỗi nếu đã đăng xuất
+            }
+            showToast("Lỗi tải cuộc trò chuyện: " + error.getMessage());
             return;
         }
         if (value != null) {
@@ -237,18 +303,18 @@ public class MainActivity extends BaseActivity implements ConversionListener {
 
     private void getToken() {
         FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> {
-            String currentToken = preferenceManager.getFcmToken();
+            String currentToken = preferenceManager.getDeviceFcmToken();
             if (!token.equals(currentToken)) {
                 updateToken(token);
             }
-            Log.d("MainActivity", "FCM token fetched: " + token);
+            Log.d("FCM_TOKEN", "FCM token fetched: " + token);
         }).addOnFailureListener(e -> {
-            Log.e("MainActivity", "Failed to fetch FCM token: " + e.getMessage());
+            Log.e("FCM_TOKEN", "Failed to fetch FCM token: " + e.getMessage());
         });
     }
 
     private void updateToken(String token) {
-        preferenceManager.saveFcmToken(token, System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000); // 7 days
+        preferenceManager.saveDeviceFcmToken(token);
         String userId = preferenceManager.getString(Constant.KEY_USER_ID);
         if (userId != null) {
             DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_USERS)
@@ -275,7 +341,6 @@ public class MainActivity extends BaseActivity implements ConversionListener {
         String userId = preferenceManager.getString(Constant.KEY_USER_ID);
         Log.d("MainActivity", "User signing out: " + userId);
 
-        // Log sign out event
         HashMap<String, Object> log = new HashMap<>();
         log.put("userId", userId != null ? userId : "unknown");
         log.put("action", "sign_out");
@@ -289,14 +354,12 @@ public class MainActivity extends BaseActivity implements ConversionListener {
                     Log.e("MainActivity", "Failed to log sign out: " + e.getMessage());
                 });
 
-        // Proceed with sign out
         auth.signOut();
         if (userId != null) {
             DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_USERS)
                     .document(userId);
             HashMap<String, Object> updates = new HashMap<>();
-            updates.put(Constant.KEY_FCM_TOKEN, FieldValue.delete());
-            updates.put(Constant.KEY_AVAILABILITY, 0);
+            updates.put(Constant.KEY_AVAILABILITY, 0); // Chỉ cập nhật availability
             documentReference.update(updates)
                     .addOnSuccessListener(unused -> {
                         Log.d("MainActivity", "User data updated successfully");
@@ -306,10 +369,10 @@ public class MainActivity extends BaseActivity implements ConversionListener {
                     });
         }
 
-        // Clear preferences and redirect
         preferenceManager.clear();
         preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, false);
         redirectToSignIn();
+        finishAffinity(); // Đóng tất cả activity
     }
 
     private void redirectToSignIn() {

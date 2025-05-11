@@ -12,6 +12,7 @@ public class Constant {
 
     //FCM
     public static final String KEY_FCM_TOKEN = "fcmtoken";
+    public static final String DEVICE_FCM_TOKEN = "device_fcm_token";
     public static final String KEY_USER = "user";
 
     //Chat message
@@ -41,4 +42,5 @@ public class Constant {
     public static final String KEY_ATTEMPT_TIMESTAMP = "attempt_timestamp";
     public static final int MAX_LOGIN_ATTEMPTS = 5;
     public static final long ATTEMPT_WINDOW = 5 * 60 * 1000; // 5 minutes
+    public static final String KEY_SESSION_TOKEN = "sessionToken";
 }

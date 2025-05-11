@@ -170,7 +170,7 @@ public class SignUpActivity extends AppCompatActivity {
                 .document(userId)
                 .get()
                 .addOnSuccessListener(documentSnapshot -> {
-                    String currentToken = preferenceManager.getFcmToken();
+                    String currentToken = preferenceManager.getDeviceFcmToken();
                     if (documentSnapshot.exists()) {
                         String storedToken = documentSnapshot.getString(Constant.KEY_FCM_TOKEN);
                         if (storedToken != null && !storedToken.equals(currentToken)) {
@@ -222,7 +222,7 @@ public class SignUpActivity extends AppCompatActivity {
                         preferenceManager.putString(Constant.KEY_EMAIL, email);
                         preferenceManager.putString(Constant.KEY_IMAGE, encodedImage);
                         if (fcmToken != null) {
-                            preferenceManager.saveFcmToken(fcmToken, System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000); // 7 days
+                            preferenceManager.saveDeviceFcmToken(fcmToken);
                         }
                         stopVerification();
                         showToast("Đăng ký thành công!");

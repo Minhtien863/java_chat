@@ -28,6 +28,7 @@ import com.androids.javachat.Networks.ApiClient;
 import com.androids.javachat.Networks.ApiService;
 import com.google.gson.Gson;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
@@ -58,7 +59,6 @@ public class ChatActivity extends BaseActivity {
     private String conversionId = null;
     private Boolean isReceiverOnline = false;
 
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -88,6 +88,17 @@ public class ChatActivity extends BaseActivity {
                 .addSnapshotListener(eventListener);
     }
 
+    private void logChatEvent(String userId, String action) {
+        HashMap<String, Object> log = new HashMap<>();
+        log.put("userId", userId != null ? userId : "unknown");
+        log.put("action", action);
+        log.put("receiverId", receiverUser != null ? receiverUser.id : "unknown");
+        log.put("timestamp", com.google.firebase.firestore.FieldValue.serverTimestamp());
+        log.put("deviceInfo", android.os.Build.MODEL + " (Android " + android.os.Build.VERSION.RELEASE + ")");
+        db.collection("logs").add(log)
+                .addOnFailureListener(e -> Log.e("ChatActivity", "Failed to log chat event: " + e.getMessage()));
+    }
+
     private boolean checkMessageRateLimit() {
         int messageCount = preferenceManager.getString(Constant.KEY_MESSAGE_COUNT) != null ?
                 Integer.parseInt(preferenceManager.getString(Constant.KEY_MESSAGE_COUNT)) : 0;
@@ -102,6 +113,7 @@ public class ChatActivity extends BaseActivity {
         }
 
         if (messageCount >= Constant.MAX_MESSAGES_PER_MINUTE) {
+            logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "rate_limit_exceeded");
             return false;
         }
 
@@ -144,27 +156,36 @@ public class ChatActivity extends BaseActivity {
                 .replace("\\u0027", "'");
     }
 
+    //Mã hóa tin nhắn
     private String encryptMessage(String message) {
-        if (message == null || message.isEmpty()) return "";
+        if (message == null || message.isEmpty()) {
+            Log.w("ChatActivity", "Message is null or empty");
+            return "";
+        }
+        String aesKey = preferenceManager.getString("AES_KEY");
+        if (aesKey == null) {
+            Log.e("ChatActivity", "AES key not found for encryption");
+            showToast("Lỗi: Không tìm thấy khóa mã hóa");
+            return ""; // Trả về chuỗi rỗng thay vì message thô
+        }
         try {
-            String aesKey = preferenceManager.getString("AES_KEY");
-            if (aesKey == null) {
-                Log.e("ChatActivity", "AES key not found for encryption");
-                return message;
-            }
             byte[] keyBytes = Base64.decode(aesKey, Base64.DEFAULT);
+            SecureRandom random = new SecureRandom();
             byte[] iv = new byte[16];
-            new SecureRandom().nextBytes(iv);
+            random.nextBytes(iv);
             Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyBytes, "AES"), new IvParameterSpec(iv));
-            byte[] encryptedBytes = cipher.doFinal(message.getBytes(StandardCharsets.UTF_8));
-            byte[] combined = new byte[iv.length + encryptedBytes.length];
-            System.arraycopy(iv, 0, combined, 0, iv.length);
-            System.arraycopy(encryptedBytes, 0, combined, iv.length, encryptedBytes.length);
-            return Base64.encodeToString(combined, Base64.DEFAULT);
+            byte[] ciphertext = cipher.doFinal(message.getBytes(StandardCharsets.UTF_8));
+            byte[] encrypted = new byte[iv.length + ciphertext.length];
+            System.arraycopy(iv, 0, encrypted, 0, iv.length);
+            System.arraycopy(ciphertext, 0, encrypted, iv.length, ciphertext.length);
+            String encoded = Base64.encodeToString(encrypted, Base64.DEFAULT);
+            Log.d("ChatActivity", "Encryption successful: " + encoded);
+            return encoded;
         } catch (Exception e) {
             Log.e("ChatActivity", "Encryption failed: " + e.getMessage());
-            return message;
+            showToast("Lỗi mã hóa tin nhắn");
+            return ""; // Trả về chuỗi rỗng thay vì message thô
         }
     }
 
@@ -174,6 +195,7 @@ public class ChatActivity extends BaseActivity {
             String aesKey = preferenceManager.getString("AES_KEY");
             if (aesKey == null) {
                 Log.e("ChatActivity", "AES key not found for decryption");
+                logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "decryption_failed");
                 return encryptedMessage;
             }
             byte[] keyBytes = Base64.decode(aesKey, Base64.DEFAULT);
@@ -188,7 +210,8 @@ public class ChatActivity extends BaseActivity {
             return new String(decryptedBytes, StandardCharsets.UTF_8);
         } catch (Exception e) {
             Log.e("ChatActivity", "Decryption failed: " + e.getMessage());
-            return encryptedMessage;
+            logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "decryption_failed");
+            return "encryptedMessage";
         }
     }
 
@@ -211,6 +234,7 @@ public class ChatActivity extends BaseActivity {
         message.put(Constant.KEY_TIMESTAMP, new Date());
         db.collection(Constant.KEY_COLLECTION_CHAT).add(message).addOnSuccessListener(documentReference -> {
             incrementMessageCount();
+            logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "message_sent");
             if (receiverUser.token == null) {
                 fetchReceiverFcmTokenFromFirestoreAndSend(sanitizedMessage);
             } else {
@@ -218,6 +242,7 @@ public class ChatActivity extends BaseActivity {
             }
         }).addOnFailureListener(e -> {
             Log.e("Firestore", "Failed to send message: " + e.getMessage());
+            logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "message_send_failed");
         });
         binding.inputMessage.setText(null);
         if (conversionId != null) {
@@ -245,35 +270,29 @@ public class ChatActivity extends BaseActivity {
                     sendNotificationToReceiver(sanitizedMessage);
                 } else {
                     Log.e("FCM_TEST", "FCM token still not found for receiver after fetch");
+                    logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "fcm_token_missing");
                 }
             } else {
                 Log.e("FCM_TEST", "Failed to fetch FCM token: " + task.getException());
+                logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "fcm_fetch_failed");
             }
         });
     }
 
     private void sendNotificationToReceiver(String sanitizedMessage) {
-        String accessToken = preferenceManager.getFcmToken();
-        if (accessToken == null) {
-            preferenceManager.refreshFcmToken(new PreferenceManager.OnTokenRefreshListener() {
-                @Override
-                public void onTokenRefreshed(String newToken) {
-                    sendNotificationWithToken(newToken, sanitizedMessage);
-                }
-
-                @Override
-                public void onTokenRefreshFailed(Exception e) {
-                    Log.e("FCM", "Failed to refresh token: " + e.getMessage());
-                }
-            });
-        } else {
+        try {
+            String accessToken = preferenceManager.getAccessToken();
             sendNotificationWithToken(accessToken, sanitizedMessage);
+        } catch (IOException e) {
+            Log.e("FCM_TEST", "Failed to get access token: " + e.getMessage());
+            logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "fcm_access_token_failed");
         }
     }
 
     private void sendNotificationWithToken(String accessToken, String sanitizedMessage) {
         if (receiverUser.token == null || receiverUser.token.isEmpty()) {
             Log.e("FCM_TEST", "FCM token not found for receiver");
+            logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "fcm_token_missing");
             return;
         }
 
@@ -303,15 +322,18 @@ public class ChatActivity extends BaseActivity {
             public void onResponse(Call<MessageResponse> call, Response<MessageResponse> response) {
                 if (response.isSuccessful() && response.body() != null) {
                     Log.d("FCM_TEST", "Notification sent successfully: " + response.body().toString());
+                    logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "fcm_sent");
                 } else {
                     Log.e("FCM_TEST", "Failed to send: " + response.code() + " - " + response.raw().toString());
                     Log.e("FCM_TEST", "Request body: " + new Gson().toJson(request));
+                    logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "fcm_send_failed");
                 }
             }
 
             @Override
             public void onFailure(Call<MessageResponse> call, Throwable t) {
                 Log.e("FCM_TEST", "Error: " + t.getMessage());
+                logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "fcm_send_failed");
             }
         });
     }
@@ -382,6 +404,7 @@ public class ChatActivity extends BaseActivity {
         receiverUser = (User) getIntent().getSerializableExtra(Constant.KEY_USER);
         if (receiverUser == null) {
             Log.e("ChatActivity", "Receiver user is null, finishing activity");
+            logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "receiver_user_null");
             finish();
             return;
         }
@@ -406,6 +429,7 @@ public class ChatActivity extends BaseActivity {
                 binding.chatView.setAdapter(chatAdapter);
             } else {
                 Log.e("FCM_TEST", "Failed to fetch receiver details: " + task.getException());
+                logChatEvent(preferenceManager.getString(Constant.KEY_USER_ID), "fetch_receiver_failed");
             }
         });
     }
@@ -421,11 +445,17 @@ public class ChatActivity extends BaseActivity {
 
     private void updateConversion(String message) {
         DocumentReference documentReference = db.collection(Constant.KEY_COLLECTION_CONVERSATIONS).document(conversionId);
-        documentReference.update(Constant.KEY_LAST_MESSAGE, message, Constant.KEY_TIMESTAMP, new Date());
+        documentReference.update(
+                Constant.KEY_LAST_MESSAGE, message,
+                Constant.KEY_TIMESTAMP, new Date()
+        ).addOnFailureListener(e -> Log.e("ChatActivity", "Failed to update conversion: " + e.getMessage()));
     }
 
     private void addConversion(HashMap<String, Object> conversion) {
-        db.collection(Constant.KEY_COLLECTION_CONVERSATIONS).add(conversion).addOnSuccessListener(documentReference -> conversionId = documentReference.getId());
+        db.collection(Constant.KEY_COLLECTION_CONVERSATIONS)
+                .add(conversion)
+                .addOnSuccessListener(documentReference -> conversionId = documentReference.getId())
+                .addOnFailureListener(e -> Log.e("ChatActivity", "Failed to add conversion: " + e.getMessage()));
     }
 
     private void checkForConversion() {
@@ -446,6 +476,10 @@ public class ChatActivity extends BaseActivity {
                         conversionId = documentSnapshot.getId();
                     }
                 });
+    }
+
+    private void showToast(String message) {
+        Toast.makeText(getApplicationContext(), message, Toast.LENGTH_SHORT).show();
     }
 
     @Override

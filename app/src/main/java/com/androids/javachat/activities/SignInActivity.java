@@ -20,6 +20,7 @@ import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.messaging.FirebaseMessaging;
 
 import java.util.HashMap;
+import java.util.UUID;
 
 public class SignInActivity extends AppCompatActivity {
 
@@ -45,14 +46,14 @@ public class SignInActivity extends AppCompatActivity {
 
     private void checkSessionAndProceed() {
         String userId = mAuth.getCurrentUser().getUid();
+        String storedSessionToken = preferenceManager.getString(Constant.KEY_SESSION_TOKEN); // Lấy session token cục bộ
         db.collection(Constant.KEY_COLLECTION_USERS)
                 .document(userId)
                 .get()
                 .addOnSuccessListener(documentSnapshot -> {
                     if (documentSnapshot.exists()) {
-                        String storedToken = documentSnapshot.getString(Constant.KEY_FCM_TOKEN);
-                        String currentToken = preferenceManager.getFcmToken();
-                        if (storedToken != null && !storedToken.equals(currentToken)) {
+                        String firestoreSessionToken = documentSnapshot.getString(Constant.KEY_SESSION_TOKEN);
+                        if (firestoreSessionToken != null && storedSessionToken != null && !firestoreSessionToken.equals(storedSessionToken)) {
                             showToast("Tài khoản đang được đăng nhập trên thiết bị khác");
                             logSessionEvent(userId, "session_conflict");
                             mAuth.signOut();
@@ -157,43 +158,40 @@ public class SignInActivity extends AppCompatActivity {
                                             return;
                                         }
                                         DocumentSnapshot document = userTask.getResult();
-                                        db.collection(Constant.KEY_COLLECTION_USERS)
-                                                .document(userId)
-                                                .update("isEmailVerified", true)
-                                                .addOnSuccessListener(aVoid -> {
-                                                    Log.d("SignInActivity", "Updated isEmailVerified to true for user: " + userId);
-                                                })
-                                                .addOnFailureListener(e -> {
-                                                    Log.e("SignInActivity", "Failed to update isEmailVerified: " + e.getMessage());
-                                                });
 
-                                        db.collection(Constant.KEY_COLLECTION_USERS)
-                                                .document(userId)
-                                                .update(Constant.KEY_AVAILABILITY, 1)
-                                                .addOnFailureListener(e -> {
-                                                    Log.e("SignInActivity", "Failed to update availability: " + e.getMessage());
-                                                });
+                                        // Tạo session token mới
+                                        String sessionToken = UUID.randomUUID().toString();
+                                        preferenceManager.putString(Constant.KEY_SESSION_TOKEN, sessionToken);
 
+                                        // Cập nhật Firestore
+                                        HashMap<String, Object> updates = new HashMap<>();
+                                        updates.put("isEmailVerified", true);
+                                        updates.put(Constant.KEY_AVAILABILITY, 1);
+                                        updates.put(Constant.KEY_SESSION_TOKEN, sessionToken);
+
+                                        // Lấy FCM token
                                         FirebaseMessaging.getInstance().getToken().addOnCompleteListener(tokenTask -> {
-                                            String fcmToken = tokenTask.isSuccessful() ? tokenTask.getResult() : null;
-                                            if (fcmToken != null) {
-                                                preferenceManager.saveFcmToken(fcmToken, System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000); // 7 days
-                                                db.collection(Constant.KEY_COLLECTION_USERS)
-                                                        .document(userId)
-                                                        .update(Constant.KEY_FCM_TOKEN, fcmToken)
-                                                        .addOnFailureListener(e -> {
-                                                            showToast("Cảnh báo: Không thể cập nhật FCM token");
-                                                        });
-                                            } else {
-                                                showToast("Cảnh báo: Không thể lấy FCM token");
-                                            }
+                                            String fcmToken = tokenTask.isSuccessful() ? tokenTask.getResult() : "";
+                                            preferenceManager.saveDeviceFcmToken(fcmToken);
+                                            updates.put(Constant.KEY_FCM_TOKEN, fcmToken); // Luôn cập nhật, kể cả khi rỗng
+
+                                            db.collection(Constant.KEY_COLLECTION_USERS)
+                                                    .document(userId)
+                                                    .update(updates)
+                                                    .addOnSuccessListener(aVoid -> {
+                                                        Log.d("SignInActivity", "Updated user data: sessionToken=" + sessionToken + ", fcmToken=" + fcmToken);
+                                                    })
+                                                    .addOnFailureListener(e -> {
+                                                        Log.e("SignInActivity", "Failed to update user data: " + e.getMessage());
+                                                        showToast("Cảnh báo: Không thể cập nhật dữ liệu người dùng");
+                                                    });
 
                                             preferenceManager.putBoolean(Constant.KEY_SIGNED_IN, true);
                                             preferenceManager.putString(Constant.KEY_USER_ID, userId);
                                             preferenceManager.putString(Constant.KEY_NAME, document.getString(Constant.KEY_NAME));
                                             preferenceManager.putString(Constant.KEY_EMAIL, document.getString(Constant.KEY_EMAIL));
                                             preferenceManager.putString(Constant.KEY_IMAGE, document.getString(Constant.KEY_IMAGE));
-                                            preferenceManager.putString(Constant.KEY_LOGIN_ATTEMPTS, "0"); // Reset attempts
+                                            preferenceManager.putString(Constant.KEY_LOGIN_ATTEMPTS, "0");
                                             loading(false);
                                             isProcessing = false;
                                             showToast("Đăng nhập thành công!");
